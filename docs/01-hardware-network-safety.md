@@ -10,7 +10,7 @@
 | CR5 | 工业交换机/有线 | `192.168.192.201` | 29999、30003、30005 |
 | SC3000 | 工业交换机/有线 | `192.168.192.11` | 502、主动连接 PC 的 2121/30000:30009 |
 | SEER AGV | 工业交换机/有线 | `192.168.192.5` | 19204、19205、19206、19207 |
-| Ubuntu PC | `enp88s0` | `192.168.192.104/24` | FTP Server |
+| Ubuntu PC | 实际有线接口（本机为 `enp4s0`） | `192.168.192.104/24` | FTP Server |
 
 机器人有线连接不设置默认网关，避免与 Wi-Fi 的互联网默认路由竞争。VPN、Mihomo
 或其他 TUN/透明代理也不得接管 `192.168.192.0/24`。
@@ -24,11 +24,12 @@ ip -br link
 nmcli connection show
 ```
 
-以下以接口 `enp88s0`、连接名 `Robot-Network` 为例：
+以下以本机接口 `enp4s0`、连接名 `Robot-Network` 为例；部署到其他电脑时先用
+`ip -br link` 确认接口名：
 
 ```bash
 sudo nmcli connection modify "Robot-Network" \
-  connection.interface-name enp88s0 \
+  connection.interface-name enp4s0 \
   ipv4.method manual \
   ipv4.addresses 192.168.192.104/24 \
   ipv4.gateway "" \
@@ -40,7 +41,7 @@ sudo nmcli connection up "Robot-Network"
 验证：
 
 ```bash
-ip -br addr show enp88s0
+ip -br addr show enp4s0
 ip route get 192.168.192.201
 ip route get 192.168.192.5
 ip route get 192.168.192.11
@@ -49,12 +50,12 @@ ping -c 4 192.168.192.5
 ping -c 4 192.168.192.11
 ```
 
-三个 `ip route get` 结果都必须包含 `dev enp88s0 src 192.168.192.104`，不能经过
-Wi-Fi、VPN、Mihomo、`Meta` 或 TUN 接口。综合启动器默认检查 `enp88s0`；只有实际
-硬件接口名不同才覆盖：
+三个 `ip route get` 结果都必须包含实际有线接口（本机为
+`dev enp4s0 src 192.168.192.104`），不能经过 Wi-Fi、VPN、Mihomo、`Meta` 或 TUN
+接口。综合启动器会从 AGV 路由自动识别接口；只有需要强制锁定接口时才覆盖：
 
 ```bash
-export SEER_AGV_INTERFACE=enx001122334455
+export SEER_AGV_INTERFACE=enp4s0
 ```
 
 ## 3. 端口检查

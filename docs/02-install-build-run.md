@@ -95,7 +95,8 @@ export SC3000_IP=192.168.192.11
 export SC3000_FTP_USER=sc3000
 export SC3000_FTP_PASSWORD='<相机任务中配置的FTP口令>'
 export SEER_AGV_HOST=192.168.192.5
-export SEER_AGV_INTERFACE=enp88s0
+# 通常无需设置；启动器会从路由自动识别。需要锁定时再取消下一行注释：
+# export SEER_AGV_INTERFACE=enp4s0
 ```
 
 `DOBOT_WS` 未设置时，工具默认使用 `$HOME/dobot_ws`。

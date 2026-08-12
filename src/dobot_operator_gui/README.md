@@ -66,8 +66,8 @@ ros2 run dobot_operator_gui dobot_operator_gui
 机械臂；当 `192.168.192.5:19204` 可达且没有现存 `/seer_agv_node` 时，会启动
 唯一的AGV驱动。AGV不可达不会影响机械臂、夹爪和相机页面。
 
-启动器默认要求AGV路由经过有线接口`enp88s0`，同时检查物理载波和状态端口，
-以避免VPN/透明代理造成端口探测假阳性。若实际接口名不同，可在启动前设置
+启动器从 `ip route get` 自动识别AGV实际使用的有线接口，再检查该接口的物理载波
+和状态端口，以避免VPN/透明代理造成端口探测假阳性。需要锁定接口时可在启动前设置
 `SEER_AGV_INTERFACE`；AGV地址可用`SEER_AGV_HOST`覆盖。
 
 ## SEER AGV 集成边界

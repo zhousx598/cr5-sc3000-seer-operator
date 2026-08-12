@@ -28,7 +28,7 @@ cleanup_started=0
 export IP_address="${IP_address:-192.168.192.201}"
 export DOBOT_FEEDBACK_PORT="${DOBOT_FEEDBACK_PORT:-30005}"
 agv_host="${SEER_AGV_HOST:-192.168.192.5}"
-agv_interface="${SEER_AGV_INTERFACE:-enp88s0}"
+agv_interface="${SEER_AGV_INTERFACE:-}"
 
 cleanup() {
     if [ "${cleanup_started}" -ne 0 ]; then
@@ -63,10 +63,15 @@ trap on_signal INT TERM
     source "${workspace}/install/setup.bash"
 
     if ! ros2 node list 2>/dev/null | grep -Fxq '/seer_agv_node'; then
-        carrier_file="/sys/class/net/${agv_interface}/carrier"
         route_line="$(ip route get "${agv_host}" 2>/dev/null | head -n 1)"
+        route_interface="$(awk '{for (i = 1; i < NF; i++) if ($i == "dev") {print $(i + 1); exit}}' <<<"${route_line}")"
+        if [ -z "${agv_interface}" ]; then
+            agv_interface="${route_interface}"
+        fi
+        carrier_file="/sys/class/net/${agv_interface}/carrier"
         if [ -r "${carrier_file}" ] \
             && [ "$(<"${carrier_file}")" = "1" ] \
+            && [ -n "${agv_interface}" ] \
             && [[ " ${route_line} " == *" dev ${agv_interface} "* ]] \
             && nc -z -w 1 "${agv_host}" 19204 >/dev/null 2>&1; then
             setsid ros2 launch seer_agv_driver seer_agv.launch.py \
@@ -76,8 +81,8 @@ trap on_signal INT TERM
             printf 'Started SEER AGV driver pid=%s; log=%s\n' \
                 "${agv_pid}" "${agv_log_file}"
         else
-            printf 'SEER AGV %s:19204 unavailable on %s (carrier/route/port check failed); GUI will continue without AGV driver\n' \
-                "${agv_host}" "${agv_interface}"
+            printf 'SEER AGV %s:19204 unavailable (interface=%s, route=%s; carrier/route/port check failed); GUI will continue without AGV driver\n' \
+                "${agv_host}" "${agv_interface:-<none>}" "${route_line:-<none>}"
         fi
     else
         printf 'Using existing /seer_agv_node; launcher will not terminate it\n'

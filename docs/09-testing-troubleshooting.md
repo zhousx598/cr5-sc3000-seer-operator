@@ -174,14 +174,15 @@ ros2 service call /seer_agv/download_map std_srvs/srv/Trigger "{}"
 ### VPN/TUN 导致端口假阳性
 
 ```bash
-ip -br link show enp88s0
+ip -br link
 ip route get 192.168.192.201
 ip route get 192.168.192.5
 ip route get 192.168.192.11
 ```
 
-三条设备路由必须显示 `dev enp88s0 src 192.168.192.104`。启动器已经同时检查
-AGV 的载波、路由和端口；VPN/Mihomo/TUN 不得接管机器人子网。
+三条设备路由必须显示实际有线接口和 `src 192.168.192.104`（本机当前为
+`dev enp4s0`）。启动器会按 AGV 路由自动选择接口，并同时检查载波、路由和端口；
+VPN/Mihomo/TUN 不得接管机器人子网。
 
 ### 用户航点看不到或路径预览为空
 
