@@ -191,6 +191,27 @@ def test_goto_station_can_enforce_saved_station_heading(monkeypatch):
     assert calls[0][1]["angle"] == pytest.approx(math.pi)
 
 
+@pytest.mark.parametrize(
+    ('travel_mode', 'expected_method'),
+    [('auto', None), ('forward', 'forward'), ('backward', 'backward')],
+)
+def test_goto_station_travel_mode(monkeypatch, travel_mode, expected_method):
+    client = SeerClient()
+    calls = []
+
+    def fake_request(spec, body_obj=None, timeout=None):
+        calls.append((spec, body_obj, timeout))
+        return type("Resp", (), {"body": {"ret_code": 0}})()
+
+    monkeypatch.setattr(client, "request", fake_request)
+    client.goto_station("LM2", travel_mode=travel_mode)
+
+    if expected_method is None:
+        assert "method" not in calls[0][1]
+    else:
+        assert calls[0][1]["method"] == expected_method
+
+
 def test_goto_pose_uses_documented_world_path_script(monkeypatch):
     client = SeerClient()
     calls = []
@@ -217,9 +238,44 @@ def test_goto_pose_uses_documented_world_path_script(monkeypatch):
         "coordinate": "world",
         "reachAngle": pytest.approx(math.radians(3.0)),
         "reachDist": 0.03,
-        "backMode": 0,
         "useOdo": 0,
     }
+
+
+@pytest.mark.parametrize(
+    ('travel_mode', 'back_mode'), [('forward', 0), ('backward', 1)]
+)
+def test_goto_pose_explicit_travel_mode(
+    monkeypatch, travel_mode, back_mode
+):
+    client = SeerClient()
+    calls = []
+
+    def fake_request(spec, body_obj=None, timeout=None):
+        calls.append((spec, body_obj, timeout))
+        return type("Resp", (), {"body": {"ret_code": 0}})()
+
+    monkeypatch.setattr(client, "request", fake_request)
+    client.goto_pose(
+        1.2, -0.4, -0.5, "local-P1", travel_mode=travel_mode
+    )
+
+    assert calls[0][1]["script_args"]["backMode"] == back_mode
+
+
+@pytest.mark.parametrize('travel_mode', ['sideways', 'left'])
+def test_navigation_rejects_invalid_travel_mode(monkeypatch, travel_mode):
+    client = SeerClient()
+    monkeypatch.setattr(
+        client,
+        'request',
+        lambda *args, **kwargs: type(
+            'Resp', (), {'body': {'ret_code': 0}}
+        )(),
+    )
+
+    with pytest.raises(SeerApiError, match='travel_mode'):
+        client.goto_station('LM2', travel_mode=travel_mode)
 
 
 def test_plan_to_station_uses_3053_and_validates_path(monkeypatch):

@@ -68,6 +68,8 @@ AGV 反馈。二者用于区分 GUI 问题与底盘安全拦截。
 | `/seer_agv/cancel_nav` | `std_srvs/Trigger` | 3003 |
 
 危险状态改变服务含 `operator_confirmed` 和/或 GUI 位姿快照，不能用来绕过现场确认。
+两个导航服务的 `travel_mode` 接受 `auto`、`forward`、`backward`。官方站点的
+`auto`省略3051 `method`；本地位姿的显式正走/倒走映射为`backMode=0/1`。
 
 ## 5. SC3000 协议
 

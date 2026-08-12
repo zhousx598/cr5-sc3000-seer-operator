@@ -159,7 +159,9 @@ def test_agv_navigation_waits_for_new_running_and_complete_status():
         ]
     )
     client.agv_status = lambda maximum_age=2.0: next(statuses)
-    client.agv_navigate_to_station = lambda station, speed: ("task-1", "ok")
+    client.agv_navigate_to_station = (
+        lambda station, speed, travel_mode='auto': ("task-1", "ok")
+    )
     client.agv_cancel_navigation = lambda: "cancelled"
     progress = []
 
@@ -181,8 +183,10 @@ def test_agv_navigation_honors_cancel_before_sending():
     sent = []
     cancel = threading.Event()
     cancel.set()
-    client.agv_navigate_to_station = lambda station, speed: sent.append(
-        (station, speed)
+    client.agv_navigate_to_station = (
+        lambda station, speed, travel_mode='auto': sent.append(
+            (station, speed, travel_mode)
+        )
     )
 
     completed = DobotRosClient.agv_navigate_and_wait(
@@ -211,6 +215,7 @@ def test_station_navigation_request_includes_catalog_heading():
     assert captured["name"] == "navigate"
     assert captured["request"].use_target_yaw is True
     assert captured["request"].target_yaw == 0.75
+    assert captured["request"].travel_mode == 'auto'
 
 
 def test_pose_navigation_and_plan_requests_are_typed():
@@ -239,7 +244,29 @@ def test_pose_navigation_and_plan_requests_are_typed():
     )
     assert pose_request.yaw == 0.5
     assert pose_request.max_speed == 0.05
+    assert pose_request.travel_mode == 'auto'
     assert captured[1][1].target_station_id == "LM2"
+
+
+def test_agv_navigation_requests_carry_explicit_travel_mode():
+    captured = []
+    client = Harness()
+    client.agv_stations = lambda: []
+
+    def fake_call(name, request, timeout):
+        captured.append((name, request, timeout))
+        return type("Response", (), {"task_id": "t", "message": "ok"})()
+
+    client._call_agv = fake_call
+    DobotRosClient.agv_navigate_to_station(
+        client, 'LM1', 0.05, travel_mode='backward'
+    )
+    DobotRosClient.agv_navigate_to_pose(
+        client, 'P1', 1.0, 2.0, 0.5, 0.05, travel_mode='forward'
+    )
+
+    assert captured[0][1].travel_mode == 'backward'
+    assert captured[1][1].travel_mode == 'forward'
 
 
 def test_pose_completion_check_handles_wrapped_heading_and_tolerance():

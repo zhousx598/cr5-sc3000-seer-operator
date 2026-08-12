@@ -14,6 +14,11 @@ from .core import validate_point_name
 
 
 SCHEMA_VERSION = 1
+TRAVEL_MODE_LABELS = {
+    'auto': '自动',
+    'forward': '正走',
+    'backward': '倒走',
+}
 SUPPORTED_KINDS = {
     'agv_navigate_pose',
     'agv_navigate_station',
@@ -85,12 +90,14 @@ class QueueCommand:
                 f'{self.params["waypoint_name"]}；'
                 f'X={self.params["x"]:.3f} m，Y={self.params["y"]:.3f} m，'
                 f'Yaw={math.degrees(self.params["yaw"]):.1f}°；'
+                f'行驶方式 {TRAVEL_MODE_LABELS[self.params["travel_mode"]]}；'
                 f'最大速度 {self.params["max_speed_mps"]:.2f} m/s'
             )
         if self.kind == 'agv_navigate_station':
             return (
                 f'{self.params["station_id"]}；最大速度 '
                 f'{self.params["max_speed_mps"]:.2f} m/s；'
+                f'行驶方式 {TRAVEL_MODE_LABELS[self.params["travel_mode"]]}；'
                 f'到站超时 {self.params["timeout_s"]:.0f} s'
             )
         if self.kind == 'move_point':
@@ -158,13 +165,19 @@ def _normalize_command(
     if not isinstance(params, dict):
         raise OperatorInputError('队列指令参数必须是对象')
 
+    # Version-1 queues saved before travel mode support remain valid and use
+    # controller/path defaults.  New saves always persist the explicit field.
+    params = dict(params)
+    if kind in {'agv_navigate_pose', 'agv_navigate_station'}:
+        params.setdefault('travel_mode', 'auto')
+
     expected_keys = {
         'agv_navigate_pose': {
             'waypoint_name', 'x', 'y', 'yaw',
-            'max_speed_mps', 'timeout_s',
+            'max_speed_mps', 'timeout_s', 'travel_mode',
         },
         'agv_navigate_station': {
-            'station_id', 'max_speed_mps', 'timeout_s'
+            'station_id', 'max_speed_mps', 'timeout_s', 'travel_mode'
         },
         'move_point': {
             'point', 'speed_factor', 'speed_j', 'acc_j', 'tolerance_deg'
@@ -211,6 +224,12 @@ def _normalize_command(
             raise OperatorInputError('AGV最大速度必须在0.01~0.20 m/s之间')
         if not 10.0 <= timeout <= 3600.0:
             raise OperatorInputError('AGV到站超时必须在10~3600秒之间')
+        travel_mode = params['travel_mode']
+        if (
+            not isinstance(travel_mode, str)
+            or travel_mode not in TRAVEL_MODE_LABELS
+        ):
+            raise OperatorInputError('AGV行驶方式必须是自动、正走或倒走')
         return {
             'waypoint_name': name,
             'x': x,
@@ -218,6 +237,7 @@ def _normalize_command(
             'yaw': math.atan2(math.sin(yaw), math.cos(yaw)),
             'max_speed_mps': max_speed,
             'timeout_s': timeout,
+            'travel_mode': travel_mode,
         }
     if kind == 'agv_navigate_station':
         station_id = params['station_id']
@@ -234,10 +254,17 @@ def _normalize_command(
             raise OperatorInputError('AGV最大速度必须在0.01~0.20 m/s之间')
         if not 10.0 <= timeout <= 3600.0:
             raise OperatorInputError('AGV到站超时必须在10~3600秒之间')
+        travel_mode = params['travel_mode']
+        if (
+            not isinstance(travel_mode, str)
+            or travel_mode not in TRAVEL_MODE_LABELS
+        ):
+            raise OperatorInputError('AGV行驶方式必须是自动、正走或倒走')
         return {
             'station_id': station_id,
             'max_speed_mps': max_speed,
             'timeout_s': timeout,
+            'travel_mode': travel_mode,
         }
     if kind == 'move_point':
         point = params['point']
@@ -495,6 +522,7 @@ class TaskQueueRunner:
                 params['timeout_s'],
                 cancel_event=cancel_event,
                 progress=lambda text: report(index, 'running', text),
+                travel_mode=params['travel_mode'],
             )
             if not completed:
                 return False
@@ -511,6 +539,7 @@ class TaskQueueRunner:
                 params['timeout_s'],
                 cancel_event=cancel_event,
                 progress=lambda text: report(index, 'running', text),
+                travel_mode=params['travel_mode'],
             )
             if not completed:
                 return False

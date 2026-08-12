@@ -2,6 +2,7 @@ string station_id
 float64 max_speed
 bool use_target_yaw
 float64 target_yaw
+string travel_mode
 ---
 bool success
 string message

@@ -89,9 +89,12 @@ Services:
 - `/seer_agv/cancel_relocalization` (`std_srvs/Trigger`) sends verified `2004`
 - `/seer_agv/navigate_to_station` (`seer_agv_msgs/NavigateToStation`) sends
   verified `3051` with the optional saved station heading only after the common
-  safety gate passes
+  safety gate passes; `travel_mode=auto` omits `method`, while `forward` and
+  `backward` send the documented matching method
 - `/seer_agv/navigate_to_pose` (`seer_agv_msgs/NavigateToPose`) sends documented
-  `3051` `syspy/goPath.py` world `x/y/theta` arguments after the same safety gate
+  `3051` `syspy/goPath.py` world `x/y/theta` arguments after the same safety
+  gate; explicit forward/backward maps to `backMode=0/1`, and auto leaves the
+  optional script argument unset
 - `/seer_agv/plan_to_station` (`seer_agv_msgs/PlanToStation`) queries verified
   `3053` and returns the planned official-station sequence without moving
 

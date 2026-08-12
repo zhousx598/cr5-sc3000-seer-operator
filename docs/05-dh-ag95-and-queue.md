@@ -185,7 +185,7 @@ B_now_T_target = correction × B_ref_T_target
 建议顺序：
 
 1. 先把机械臂收回经现场验证的安全运输姿态；
-2. `AGV导航到航点`，选择按钮任务对应的 LM 航点、低速和到站超时；
+2. `AGV导航到航点`，选择按钮任务对应的 LM 航点、自动/正走/倒走、低速和到站超时；
 3. `移动到点位 BUTTON1_VIEW`，使用普通低速关节运动到宽视野观察点；
 4. `测量AprilTag纠偏`，目标下拉框选择 `BUTTON1_REF`；
 5. `移动到纠偏点位 BUTTON1_APPROACH`，选择关节路径 `MovJ`；

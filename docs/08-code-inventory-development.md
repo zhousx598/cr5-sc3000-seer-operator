@@ -41,7 +41,7 @@
 | 文件 | 职责 |
 |---|---|
 | `main.py` | 创建 rclpy 多线程执行器和 Qt 应用 |
-| `main_window.py` | 七个页面、人工确认、后台任务、预览、关闭恢复逻辑 |
+| `main_window.py` | 五个综合页面、人工确认、后台任务、预览、关闭恢复逻辑 |
 | `ros_client.py` | CR5/AGV 类型化 ROS 门面、服务串行化、运动/夹爪状态机 |
 | `core.py` | 点位解析、原子保存、采集组格式、TCP 检查 |
 | `camera_capture.py` | 内嵌 FTP Server、Modbus 触发、完整图片检测 |

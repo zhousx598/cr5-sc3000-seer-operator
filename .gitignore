@@ -16,6 +16,15 @@ htmlcov/
 *~
 .DS_Store
 
+# Local credentials, tokens and certificates
+.env
+.env.*
+!.env.example
+*.pem
+*.key
+*.p12
+*.pfx
+
 # Runtime data and device-specific calibration/production data.
 queues/
 agv_waypoints.json

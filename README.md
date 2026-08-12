@@ -81,6 +81,10 @@ export DOBOT_WS="${HOME}/dobot_ws"
 
 ## 文档导航
 
+首次接手工程或准备交给其他 Codex 时，先阅读
+[Codex 工程接手引导](%E5%BC%95%E5%AF%BC.md)。它集中说明当前架构、模块边界、坐标约定、
+安全规则、测试与交付流程。
+
 1. [硬件、网络和安全](docs/01-hardware-network-safety.md)
 2. [安装、构建和启动](docs/02-install-build-run.md)
 3. [CR5 驱动、拖动取点与点位运动](docs/03-cr5-operation.md)
@@ -122,7 +126,7 @@ dobot_ws/
 - SC3000，1408×1024，FTP + Modbus TCP；
 - AprilTag `tag36h11`，现场黑框边长 58.5 mm；
 - SEER Robokit 3.4.4.6；
-- 驱动恢复、协议、视觉纠偏、GUI 和安全状态机功能测试共 152 项通过
+- 驱动恢复、协议、视觉纠偏、GUI 和安全状态机功能测试共 167 项通过
   （2026-08-12，系统 ROS/Python 环境）。
 
 现场 IP、相机内参、手眼外参、末端负载和地图名称都是部署数据，不是跨设备通用

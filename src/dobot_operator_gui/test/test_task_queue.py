@@ -156,9 +156,10 @@ class FakeRosClient:
         timeout_s,
         cancel_event,
         progress,
+        travel_mode='auto',
     ):
         self.calls.append(
-            ('agv', station_id, max_speed_mps, timeout_s)
+            ('agv', station_id, max_speed_mps, timeout_s, travel_mode)
         )
         progress('navigating')
         return not cancel_event.is_set()
@@ -173,6 +174,7 @@ class FakeRosClient:
         timeout_s,
         cancel_event,
         progress,
+        travel_mode='auto',
     ):
         self.calls.append(
             (
@@ -183,6 +185,7 @@ class FakeRosClient:
                 yaw,
                 max_speed_mps,
                 timeout_s,
+                travel_mode,
             )
         )
         progress('pose navigating')
@@ -289,7 +292,7 @@ def test_runner_can_navigate_before_visual_correction(tmp_path: Path):
     )
 
     assert result.completed == 3
-    assert ros.calls[0] == ('agv', 'LM1', 0.08, 300.0)
+    assert ros.calls[0] == ('agv', 'LM1', 0.08, 300.0, 'auto')
     assert ros.calls[1][0] == 'pose'
 
 
@@ -304,8 +307,45 @@ def test_runner_executes_local_pose_navigation(tmp_path: Path):
 
     assert result.completed == 1
     assert ros.calls == [
-        ('agv_pose', 'LOCAL1', 1.2, -0.4, 0.5, 0.05, 300.0)
+        (
+            'agv_pose', 'LOCAL1', 1.2, -0.4, 0.5, 0.05, 300.0,
+            'auto',
+        )
     ]
+
+
+def test_old_queue_navigation_defaults_to_auto(tmp_path: Path):
+    path = tmp_path / 'old.json'
+    path.write_text(
+        '{"schema_version":1,"commands":[{"kind":'
+        '"agv_navigate_station","params":{"station_id":"LM1",'
+        '"max_speed_mps":0.08,"timeout_s":300}}]}',
+        encoding='utf-8',
+    )
+
+    command = load_queue(path)[0]
+
+    assert command.params['travel_mode'] == 'auto'
+
+
+@pytest.mark.parametrize('travel_mode', ['auto', 'forward', 'backward'])
+def test_queue_accepts_supported_agv_travel_modes(travel_mode):
+    command = agv_navigation_command()
+    params = dict(command.params)
+    params['travel_mode'] = travel_mode
+
+    assert QueueCommand('agv_navigate_station', params).params[
+        'travel_mode'
+    ] == travel_mode
+
+
+def test_queue_rejects_invalid_agv_travel_mode():
+    command = agv_navigation_command()
+    params = dict(command.params)
+    params['travel_mode'] = 'sideways'
+
+    with pytest.raises(OperatorInputError, match='行驶方式'):
+        QueueCommand('agv_navigate_station', params)
 
 
 @pytest.mark.parametrize(

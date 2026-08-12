@@ -53,6 +53,8 @@ from .visual_correction import rotation_angle_degrees
 
 
 SERVICE_PREFIX = '/dobot_bringup_v3/srv'
+ENABLE_SERVICE_TIMEOUT_SEC = 30.0
+ENABLE_MODE_TIMEOUT_SEC = 8.0
 MOTION_START_DELTA_DEG = 0.05
 TARGET_STABLE_SAMPLES = 2
 ROBOT_FEEDBACK_MAX_AGE = 2.0
@@ -455,6 +457,7 @@ class DobotRosClient(Node):
         max_speed: float,
         target_yaw: float | None = None,
         use_station_yaw: bool = True,
+        travel_mode: str = 'auto',
     ) -> tuple[str, str]:
         request = NavigateToStation.Request()
         target = station_id.strip()
@@ -470,6 +473,7 @@ class DobotRosClient(Node):
                 break
         request.use_target_yaw = target_yaw is not None
         request.target_yaw = 0.0 if target_yaw is None else float(target_yaw)
+        request.travel_mode = travel_mode
         response = self._call_agv('navigate', request, timeout=8.0)
         return response.task_id, response.message
 
@@ -480,6 +484,7 @@ class DobotRosClient(Node):
         y: float,
         yaw: float,
         max_speed: float,
+        travel_mode: str = 'auto',
     ) -> tuple[str, str]:
         request = NavigateToPose.Request()
         request.waypoint_name = waypoint_name.strip()
@@ -487,6 +492,7 @@ class DobotRosClient(Node):
         request.y = float(y)
         request.yaw = float(yaw)
         request.max_speed = float(max_speed)
+        request.travel_mode = travel_mode
         response = self._call_agv('navigate_pose', request, timeout=8.0)
         return response.task_id, response.message
 
@@ -507,13 +513,14 @@ class DobotRosClient(Node):
         timeout_s: float,
         cancel_event: threading.Event | None = None,
         progress: Callable[[str], None] | None = None,
+        travel_mode: str = 'auto',
     ) -> bool:
         target = station_id.strip()
         return DobotRosClient._agv_start_and_wait(
             self,
             target_label=target,
             start_navigation=lambda: self.agv_navigate_to_station(
-                target, max_speed
+                target, max_speed, travel_mode=travel_mode
             ),
             timeout_s=timeout_s,
             cancel_event=cancel_event,
@@ -533,6 +540,7 @@ class DobotRosClient(Node):
         timeout_s: float,
         cancel_event: threading.Event | None = None,
         progress: Callable[[str], None] | None = None,
+        travel_mode: str = 'auto',
     ) -> bool:
         target = waypoint_name.strip()
         expected = (float(x), float(y), float(yaw))
@@ -540,7 +548,12 @@ class DobotRosClient(Node):
             self,
             target_label=target,
             start_navigation=lambda: self.agv_navigate_to_pose(
-                target, expected[0], expected[1], expected[2], max_speed
+                target,
+                expected[0],
+                expected[1],
+                expected[2],
+                max_speed,
+                travel_mode=travel_mode,
             ),
             timeout_s=timeout_s,
             cancel_event=cancel_event,
@@ -862,9 +875,36 @@ class DobotRosClient(Node):
         if mode == '4':
             request = EnableRobot.Request()
             request.load = float(load)
-            self._call('EnableRobot', request)
+            # Releasing all six brakes can take substantially longer than a
+            # normal Dashboard query.  Keep this command-specific timeout
+            # separate from the short default used by status polling.
+            self._call(
+                'EnableRobot',
+                request,
+                timeout=ENABLE_SERVICE_TIMEOUT_SEC,
+            )
+            try:
+                mode = self._wait_for_mode(
+                    {'5'}, timeout=ENABLE_MODE_TIMEOUT_SEC
+                )
+            except DobotServiceError as exc:
+                try:
+                    current_mode = self.get_mode()
+                except DobotServiceError:
+                    current_mode = ''
+                try:
+                    error_ids = self.get_error_ids()
+                except DobotServiceError:
+                    error_ids = '读取失败'
+                current = mode_text(current_mode) if current_mode else '未知'
+                raise DobotServiceError(
+                    'EnableRobot 已返回 res=0，但机械臂未完成使能；'
+                    f'当前为 {current}，报警码={error_ids}。'
+                    '请现场确认物理急停已旋转释放；若此前出现报警116，'
+                    '请按控制器要求重新上电，重启驱动后再使能。'
+                ) from exc
         self.set_speed_factor(speed_factor)
-        return self._wait_for_mode({'5'}, timeout=8.0)
+        return mode
 
     def disable_robot(self) -> str:
         mode = self.get_mode()

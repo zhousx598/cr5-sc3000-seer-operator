@@ -20,6 +20,7 @@ from visualization_msgs.msg import Marker, MarkerArray
 
 from seer_agv_driver.seer_client import DEFAULT_HOST, Footprint, SeerClient, SafetyState
 from seer_agv_driver.seer_client import evaluate_safety_state
+from seer_agv_driver.seer_client import normalize_travel_mode
 from seer_agv_msgs.srv import ConfirmLocalization, LoadMap, NavigateToPose
 from seer_agv_msgs.srv import NavigateToStation, PlanToStation
 from seer_agv_msgs.srv import Relocalize
@@ -965,6 +966,12 @@ class SeerAgvNode(Node):
             response.success = False
             response.message = "station_id must not be empty"
             return response
+        try:
+            travel_mode = normalize_travel_mode(request.travel_mode)
+        except Exception as exc:
+            response.success = False
+            response.message = str(exc)
+            return response
         speed = float(request.max_speed) if request.max_speed > 0.0 else 0.08
         if not 0.01 <= speed <= self.max_navigation_speed:
             response.success = False
@@ -1016,6 +1023,7 @@ class SeerAgvNode(Node):
                 max_acc=0.1,
                 max_wacc=0.1,
                 target_yaw=target_yaw,
+                travel_mode=travel_mode,
             )
             response.success = True
             response.task_id = task_id
@@ -1041,6 +1049,12 @@ class SeerAgvNode(Node):
         if not waypoint_name:
             response.success = False
             response.message = "waypoint_name must not be empty"
+            return response
+        try:
+            travel_mode = normalize_travel_mode(request.travel_mode)
+        except Exception as exc:
+            response.success = False
+            response.message = str(exc)
             return response
         if not all(math.isfinite(value) for value in values):
             response.success = False
@@ -1089,6 +1103,7 @@ class SeerAgvNode(Node):
                 values[2],
                 task_id=task_id,
                 max_speed=speed,
+                travel_mode=travel_mode,
             )
             response.success = True
             response.task_id = task_id

@@ -7,6 +7,7 @@
 
 | 文件 | 作用 |
 |---|---|
+| [`引导.md`](../%E5%BC%95%E5%AF%BC.md) | 面向 Codex/开发者的架构、逻辑、安全、测试与交付提示词 |
 | [`start_dobot_operator_gui.sh`](../start_dobot_operator_gui.sh) | 环境净化、AGV 唯一驱动检查、GUI 启停和退出停车 |
 | [`estimate_apriltag_pose.sh`](../estimate_apriltag_pose.sh) | 从终端触发单帧并估计 AprilTag 相机位姿 |
 | [`.gitignore`](../.gitignore) | 隔离构建产物、现场数据和标定数据 |

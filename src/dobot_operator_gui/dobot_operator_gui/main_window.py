@@ -79,6 +79,20 @@ from .visual_correction import load_reference_tag_transform
 from .visual_correction import VisualCorrectionError
 
 
+AGV_TRAVEL_MODE_OPTIONS = (
+    ('自动（使用路径/脚本默认）', 'auto'),
+    ('正走', 'forward'),
+    ('倒走', 'backward'),
+)
+
+
+def _new_agv_travel_mode_combo() -> QComboBox:
+    combo = QComboBox()
+    for label, value in AGV_TRAVEL_MODE_OPTIONS:
+        combo.addItem(label, value)
+    return combo
+
+
 class AppSignals(QObject):
     task_result = pyqtSignal(int, object)
     task_error = pyqtSignal(int, str)
@@ -873,6 +887,7 @@ class DobotOperatorWindow(QMainWindow):
         agv_queue_layout = QGridLayout(agv_queue_group)
         self.queue_agv_station_combo = QComboBox()
         self.queue_agv_waypoint_combo = QComboBox()
+        self.queue_agv_travel_mode_combo = _new_agv_travel_mode_combo()
         self.queue_agv_speed_spin = QDoubleSpinBox()
         self.queue_agv_speed_spin.setRange(0.01, 0.20)
         self.queue_agv_speed_spin.setDecimals(2)
@@ -887,6 +902,7 @@ class DobotOperatorWindow(QMainWindow):
         agv_fields = (
             ('官方站点', self.queue_agv_station_combo),
             ('用户航点', self.queue_agv_waypoint_combo),
+            ('行驶方式', self.queue_agv_travel_mode_combo),
             ('最大速度', self.queue_agv_speed_spin),
             ('到站超时', self.queue_agv_timeout_spin),
         )
@@ -1086,6 +1102,7 @@ class DobotOperatorWindow(QMainWindow):
         self.agv_waypoint_timeout_spin.setDecimals(0)
         self.agv_waypoint_timeout_spin.setValue(300.0)
         self.agv_waypoint_timeout_spin.setSuffix(' 秒')
+        self.agv_waypoint_travel_mode_combo = _new_agv_travel_mode_combo()
 
         fill_pose = QPushButton('读取当前AGV位姿')
         fill_pose.clicked.connect(self._fill_current_user_waypoint_pose)
@@ -1116,11 +1133,13 @@ class DobotOperatorWindow(QMainWindow):
         waypoint_layout.addWidget(self.agv_waypoint_speed_spin, 2, 1)
         waypoint_layout.addWidget(QLabel('到站超时'), 2, 2)
         waypoint_layout.addWidget(self.agv_waypoint_timeout_spin, 2, 3)
-        waypoint_layout.addWidget(fill_pose, 2, 4)
-        waypoint_layout.addWidget(save_button, 2, 5)
-        waypoint_layout.addWidget(delete_button, 2, 6)
-        waypoint_layout.addWidget(return_button, 3, 0, 1, 4)
-        waypoint_layout.addWidget(queue_button, 3, 4, 1, 4)
+        waypoint_layout.addWidget(QLabel('行驶方式'), 2, 4)
+        waypoint_layout.addWidget(self.agv_waypoint_travel_mode_combo, 2, 5)
+        waypoint_layout.addWidget(fill_pose, 2, 6)
+        waypoint_layout.addWidget(save_button, 2, 7)
+        waypoint_layout.addWidget(delete_button, 3, 0, 1, 2)
+        waypoint_layout.addWidget(return_button, 3, 2, 1, 3)
+        waypoint_layout.addWidget(queue_button, 3, 5, 1, 3)
         layout.addWidget(waypoint_group)
 
         station_group = QGroupBox('控制器官方站点：姿态回位与路径预览')
@@ -1135,6 +1154,7 @@ class DobotOperatorWindow(QMainWindow):
         self.agv_pose_station_speed_spin.setDecimals(2)
         self.agv_pose_station_speed_spin.setValue(0.05)
         self.agv_pose_station_speed_spin.setSuffix(' m/s')
+        self.agv_pose_station_travel_mode_combo = _new_agv_travel_mode_combo()
         station_return = QPushButton('按站点保存姿态导航回位')
         station_return.setObjectName('primary')
         station_return.clicked.connect(self.navigate_agv_pose_station)
@@ -1149,9 +1169,11 @@ class DobotOperatorWindow(QMainWindow):
         station_layout.addWidget(self.agv_pose_station_label, 0, 2, 1, 3)
         station_layout.addWidget(QLabel('最大速度'), 0, 5)
         station_layout.addWidget(self.agv_pose_station_speed_spin, 0, 6)
-        station_layout.addWidget(station_return, 1, 0, 1, 2)
-        station_layout.addWidget(plan_button, 1, 2, 1, 3)
-        station_layout.addWidget(clear_plan_button, 1, 5, 1, 2)
+        station_layout.addWidget(QLabel('行驶方式'), 1, 0)
+        station_layout.addWidget(self.agv_pose_station_travel_mode_combo, 1, 1)
+        station_layout.addWidget(station_return, 1, 2, 1, 2)
+        station_layout.addWidget(plan_button, 1, 4, 1, 2)
+        station_layout.addWidget(clear_plan_button, 1, 6)
         station_layout.addWidget(self.agv_path_result_label, 2, 0, 1, 7)
         layout.addWidget(station_group)
 
@@ -1218,6 +1240,7 @@ class DobotOperatorWindow(QMainWindow):
         self.agv_nav_speed_spin.setSingleStep(0.01)
         self.agv_nav_speed_spin.setSuffix(' m/s')
         self.agv_nav_speed_spin.setValue(0.08)
+        self.agv_travel_mode_combo = _new_agv_travel_mode_combo()
         self.agv_navigate_button = QPushButton('按站点姿态导航到所选站点')
         self.agv_navigate_button.setObjectName('primary')
         self.agv_navigate_button.clicked.connect(self.navigate_agv)
@@ -1227,9 +1250,13 @@ class DobotOperatorWindow(QMainWindow):
         navigation_layout.addWidget(self.agv_station_combo, 0, 1)
         navigation_layout.addWidget(QLabel('最大速度'), 0, 2)
         navigation_layout.addWidget(self.agv_nav_speed_spin, 0, 3)
+        navigation_layout.addWidget(QLabel('行驶方式'), 0, 4)
+        navigation_layout.addWidget(self.agv_travel_mode_combo, 0, 5)
         navigation_layout.addWidget(self.agv_navigate_button, 1, 0, 1, 2)
         navigation_layout.addWidget(self.agv_cancel_button, 1, 2)
-        navigation_layout.addWidget(QLabel('地图和站点由上方地图区域统一刷新'), 1, 3)
+        navigation_layout.addWidget(
+            QLabel('地图和站点由上方地图区域统一刷新'), 1, 3, 1, 3
+        )
         layout.addWidget(navigation_group)
 
         teleop_group = QGroupBox('低速点动（差速底盘，仅前后和旋转）')
@@ -1956,13 +1983,16 @@ class DobotOperatorWindow(QMainWindow):
         if self._confirm_agv_navigation_ready() is None:
             return
         speed = self.agv_waypoint_speed_spin.value()
+        travel_mode = self.agv_waypoint_travel_mode_combo.currentData()
+        travel_mode_text = self.agv_waypoint_travel_mode_combo.currentText()
         if QMessageBox.warning(
             self,
             '确认按姿态回到用户航点',
             f'地图：{self._agv_current_map}\n航点：{waypoint.name}\n'
             f'X={waypoint.x:.3f} m，Y={waypoint.y:.3f} m，'
             f'Yaw={np.degrees(waypoint.yaw):.1f}°\n'
-            f'最大速度：{speed:.2f} m/s\n\n'
+            f'最大速度：{speed:.2f} m/s\n'
+            f'行驶方式：{travel_mode_text}\n\n'
             '该功能首次使用尚未在当前Robokit实机验收。请确认机械臂已收回、'
             '路径无人无障碍，并准备实体急停。',
             QMessageBox.Yes | QMessageBox.Cancel,
@@ -1977,6 +2007,7 @@ class DobotOperatorWindow(QMainWindow):
                 waypoint.y,
                 waypoint.yaw,
                 speed,
+                travel_mode=travel_mode,
             ),
             lambda result: self.append_log(
                 f'AGV用户航点任务已接受：task_id={result[0]}；{result[1]}'
@@ -1999,6 +2030,9 @@ class DobotOperatorWindow(QMainWindow):
                 'yaw': waypoint.yaw,
                 'max_speed_mps': self.agv_waypoint_speed_spin.value(),
                 'timeout_s': self.agv_waypoint_timeout_spin.value(),
+                'travel_mode': (
+                    self.agv_waypoint_travel_mode_combo.currentData()
+                ),
             },
         )
         self.queue_commands.append(command)
@@ -2037,12 +2071,15 @@ class DobotOperatorWindow(QMainWindow):
         station_id = str(station['id'])
         yaw = float(station.get('r', station.get('angle', 0.0)))
         speed = self.agv_pose_station_speed_spin.value()
+        travel_mode = self.agv_pose_station_travel_mode_combo.currentData()
+        travel_mode_text = self.agv_pose_station_travel_mode_combo.currentText()
         if QMessageBox.warning(
             self,
             '确认按官方站点姿态回位',
             f'站点：{station_id}\nX={float(station["x"]):.3f} m，'
             f'Y={float(station["y"]):.3f} m，Yaw={np.degrees(yaw):.1f}°\n'
-            f'最大速度：{speed:.2f} m/s\n\n'
+            f'最大速度：{speed:.2f} m/s\n'
+            f'行驶方式：{travel_mode_text}\n\n'
             '确认机械臂已收回，完整路径无人、无线缆和障碍物？',
             QMessageBox.Yes | QMessageBox.Cancel,
             QMessageBox.Cancel,
@@ -2051,7 +2088,10 @@ class DobotOperatorWindow(QMainWindow):
         self._submit(
             f'AGV按姿态导航到 {station_id}',
             lambda: self.ros.agv_navigate_to_station(
-                station_id, speed, target_yaw=yaw
+                station_id,
+                speed,
+                target_yaw=yaw,
+                travel_mode=travel_mode,
             ),
             lambda result: self.append_log(
                 f'AGV姿态回位任务已接受：task_id={result[0]}；{result[1]}'
@@ -2214,6 +2254,8 @@ class DobotOperatorWindow(QMainWindow):
             )
             return
         speed = self.agv_nav_speed_spin.value()
+        travel_mode = self.agv_travel_mode_combo.currentData()
+        travel_mode_text = self.agv_travel_mode_combo.currentText()
         station = next(
             (
                 item for item in self.ros.agv_stations()
@@ -2234,7 +2276,8 @@ class DobotOperatorWindow(QMainWindow):
             self,
             '确认AGV站点导航',
             f'目标站点：{station_id}{station_pose}\n'
-            f'最大速度：{speed:.2f} m/s\n\n'
+            f'最大速度：{speed:.2f} m/s\n'
+            f'行驶方式：{travel_mode_text}\n\n'
             '确认完整路径及AGV周围没有人员、线缆和障碍物？',
             QMessageBox.Yes | QMessageBox.Cancel,
             QMessageBox.Cancel,
@@ -2244,7 +2287,9 @@ class DobotOperatorWindow(QMainWindow):
             self.agv_teleop_enable.setChecked(False)
         self._submit(
             f'AGV导航到 {station_id}',
-            lambda: self.ros.agv_navigate_to_station(station_id, speed),
+            lambda: self.ros.agv_navigate_to_station(
+                station_id, speed, travel_mode=travel_mode
+            ),
             lambda result: self.append_log(
                 f'AGV导航任务已接受：task_id={result[0]}；{result[1]}'
             ),
@@ -3313,6 +3358,7 @@ class DobotOperatorWindow(QMainWindow):
                 'station_id': station,
                 'max_speed_mps': self.queue_agv_speed_spin.value(),
                 'timeout_s': self.queue_agv_timeout_spin.value(),
+                'travel_mode': self.queue_agv_travel_mode_combo.currentData(),
             }
         elif kind == 'agv_navigate_pose':
             name = self.queue_agv_waypoint_combo.currentText().strip()
@@ -3337,6 +3383,7 @@ class DobotOperatorWindow(QMainWindow):
                 'yaw': waypoint.yaw,
                 'max_speed_mps': self.queue_agv_speed_spin.value(),
                 'timeout_s': self.queue_agv_timeout_spin.value(),
+                'travel_mode': self.queue_agv_travel_mode_combo.currentData(),
             }
         elif kind == 'move_point':
             point = self.queue_point_combo.currentText()

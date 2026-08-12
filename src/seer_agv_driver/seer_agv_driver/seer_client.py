@@ -10,6 +10,7 @@ from typing import Any
 HEADER = b"\x5A\x01"
 DEFAULT_HOST = "192.168.192.5"
 MAX_RESPONSE_BODY_BYTES = 32 * 1024 * 1024
+TRAVEL_MODES = frozenset({'auto', 'forward', 'backward'})
 
 PORT_STATUS = 19204
 PORT_CONTROL = 19205
@@ -64,6 +65,18 @@ class SeerApiError(RuntimeError):
 
 class SeerAmbiguousMotionError(SeerProtocolError):
     """The controller may have accepted a motion command whose reply was lost."""
+
+
+def normalize_travel_mode(value: str) -> str:
+    """Validate a GUI/API travel mode; an empty ROS string means automatic."""
+    if not isinstance(value, str):
+        raise SeerApiError('travel_mode must be a string')
+    mode = value.strip().lower() or 'auto'
+    if mode not in TRAVEL_MODES:
+        raise SeerApiError(
+            'travel_mode must be auto, forward, or backward'
+        )
+    return mode
 
 
 def build_packet(api_type: int, number: int, body: bytes = b"") -> bytes:
@@ -453,7 +466,9 @@ class SeerClient:
         max_acc: float = 0.1,
         max_wacc: float = 0.1,
         target_yaw: float | None = None,
+        travel_mode: str = 'auto',
     ) -> dict[str, Any]:
+        mode = normalize_travel_mode(travel_mode)
         body: dict[str, Any] = {
             "source_id": source_id,
             "id": station_id,
@@ -469,6 +484,8 @@ class SeerClient:
             if not math.isfinite(yaw):
                 raise SeerApiError('target_yaw must be finite')
             body['angle'] = math.atan2(math.sin(yaw), math.cos(yaw))
+        if mode != 'auto':
+            body['method'] = mode
         return self.request(
             API_GOTO_STATION, body, timeout=max(5.0, self.timeout)
         ).body or {}
@@ -480,6 +497,7 @@ class SeerClient:
         yaw: float,
         task_id: str,
         max_speed: float = 0.08,
+        travel_mode: str = 'auto',
     ) -> dict[str, Any]:
         """Navigate to a world pose with Robokit's documented goPath script."""
         values = (float(x), float(y), float(yaw), float(max_speed))
@@ -487,19 +505,22 @@ class SeerClient:
             raise SeerApiError('world pose and speed must be finite')
         if not task_id.strip():
             raise SeerApiError('task_id must not be empty')
+        mode = normalize_travel_mode(travel_mode)
         normalized_yaw = math.atan2(math.sin(values[2]), math.cos(values[2]))
+        script_args = {
+            'x': values[0],
+            'y': values[1],
+            'theta': normalized_yaw,
+            'coordinate': 'world',
+            'reachAngle': math.radians(3.0),
+            'reachDist': 0.03,
+            'useOdo': 0,
+        }
+        if mode != 'auto':
+            script_args['backMode'] = 1 if mode == 'backward' else 0
         body = {
             'script_name': 'syspy/goPath.py',
-            'script_args': {
-                'x': values[0],
-                'y': values[1],
-                'theta': normalized_yaw,
-                'coordinate': 'world',
-                'reachAngle': math.radians(3.0),
-                'reachDist': 0.03,
-                'backMode': 0,
-                'useOdo': 0,
-            },
+            'script_args': script_args,
             'operation': 'Script',
             'id': 'SELF_POSITION',
             'source_id': 'SELF_POSITION',

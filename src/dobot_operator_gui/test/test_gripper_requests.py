@@ -4,6 +4,8 @@ import pytest
 
 from dobot_operator_gui.ros_client import DobotRosClient
 from dobot_operator_gui.ros_client import DobotServiceError
+from dobot_operator_gui.ros_client import ENABLE_MODE_TIMEOUT_SEC
+from dobot_operator_gui.ros_client import ENABLE_SERVICE_TIMEOUT_SEC
 
 
 class FakeGripperClient:
@@ -195,3 +197,58 @@ def test_resume_pause_rejects_wrong_mode():
 
     with pytest.raises(DobotServiceError, match='RobotMode=10'):
         client.resume_from_pause()
+
+
+class FakeEnableClient:
+    enable_robot = DobotRosClient.enable_robot
+
+    def __init__(self, mode='4', enabled_mode='5', errors='{[]}'):
+        self.mode = mode
+        self.enabled_mode = enabled_mode
+        self.errors = errors
+        self.calls = []
+
+    def get_mode(self):
+        return self.mode
+
+    def get_error_ids(self):
+        return self.errors
+
+    def _call(self, name, request, timeout=None):
+        self.calls.append((name, timeout, getattr(request, 'load', None)))
+        return SimpleNamespace(res=0)
+
+    def _wait_for_mode(self, accepted, timeout):
+        self.calls.append(('wait_mode', timeout, tuple(sorted(accepted))))
+        if self.enabled_mode not in accepted:
+            raise DobotServiceError('simulated mode timeout')
+        self.mode = self.enabled_mode
+        return self.enabled_mode
+
+    def set_speed_factor(self, ratio):
+        self.calls.append(('speed', ratio, None))
+
+
+def test_enable_uses_long_timeout_then_confirms_mode_before_speed():
+    client = FakeEnableClient()
+
+    assert client.enable_robot(2.5, 5) == '5'
+    assert client.calls == [
+        ('EnableRobot', ENABLE_SERVICE_TIMEOUT_SEC, 2.5),
+        ('wait_mode', ENABLE_MODE_TIMEOUT_SEC, ('5',)),
+        ('speed', 5, None),
+    ]
+
+
+def test_enable_reports_unfinished_enable_and_emergency_stop_recovery():
+    client = FakeEnableClient(
+        enabled_mode='4',
+        errors='{[[],[],[],[],[],[],[]]}',
+    )
+
+    with pytest.raises(
+        DobotServiceError,
+        match='报警116.*重新上电',
+    ):
+        client.enable_robot(2.5, 5)
+    assert not any(call[0] == 'speed' for call in client.calls)
