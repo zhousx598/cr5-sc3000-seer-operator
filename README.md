@@ -18,7 +18,7 @@
 - 以 FTP + Modbus TCP 获取 SC3000 图像，目标预览速率 5 FPS；
 - 棋盘格内参标定、AprilTag `solvePnP`、眼在手上手眼标定；
 - 实时输出 AprilTag 的相机坐标和 CR5 User0/基座坐标；
-- 显示 SEER 地图、站点、车体位置，支持加载地图、重定位、定位确认、站点导航
+- 显示地图、站点、车体位置，支持加载地图、重定位、定位确认、站点导航
   和低速点动。
 
 ## 系统结构
@@ -110,7 +110,7 @@ dobot_ws/
 
 `build/`、`install/`、`log/` 是 colcon 产物，不应提交到 GitHub。
 
-## 已验证基线
+## 验证基线
 
 - Ubuntu 22.04、ROS 2 Humble、系统 Python 3.10；
 - Dobot CR5 + V3 TCP-IP 服务；
