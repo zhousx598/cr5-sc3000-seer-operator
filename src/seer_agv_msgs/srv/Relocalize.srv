@@ -1,0 +1,9 @@
+bool operator_confirmed
+float64 x
+float64 y
+float64 yaw
+float64 radius
+---
+bool success
+string message
+int32 reloc_status

@@ -1,0 +1,29 @@
+seer_agv_node:
+  ros__parameters:
+    host: "192.168.192.5"
+    timeout_sec: 2.0
+    fast_status_period_sec: 0.2
+    slow_status_period_sec: 0.5
+    fast_status_timeout_sec: 0.8
+    slow_status_timeout_sec: 5.0
+    download_map_on_start: true
+    map_name: ""
+    frame_id: "seer_map"
+    base_frame_id: "seer_base_link"
+    odom_topic: "/seer_agv/odom"
+    publish_tf: true
+
+    # Motion is disabled by default. Set enable_cmd_vel:=true only after
+    # read-only status and the surrounding area are confirmed safe.
+    enable_cmd_vel: false
+    cmd_vel_topic: "/seer_agv/cmd_vel"
+    cmd_period_sec: 0.1
+    watchdog_timeout_sec: 0.4
+    differential_drive: true
+    max_vx: 0.1
+    max_w: 0.2
+    max_accel_xy: 0.1
+    max_accel_w: 0.2
+    motion_duration_ms: 300
+    max_navigation_speed: 0.08
+    debug_motion: false

@@ -1,0 +1,11 @@
+bool operator_confirmed
+float64 expected_x
+float64 expected_y
+float64 expected_yaw
+---
+bool success
+string message
+int32 reloc_status
+float64 actual_x
+float64 actual_y
+float64 actual_yaw

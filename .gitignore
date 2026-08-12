@@ -1,0 +1,25 @@
+# ROS 2 / colcon outputs
+build/
+install/
+log/
+
+# Python and test caches
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.coverage
+htmlcov/
+
+# Editor and OS files
+.idea/
+.vscode/
+*~
+.DS_Store
+
+# Runtime data and device-specific calibration/production data.
+queues/
+apriltag_validation/
+points/
+
+# Local backup/build debris
+backups/

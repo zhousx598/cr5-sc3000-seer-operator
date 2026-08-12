@@ -1,0 +1,6 @@
+bool operator_confirmed
+string map_name
+---
+bool success
+string message
+string current_map

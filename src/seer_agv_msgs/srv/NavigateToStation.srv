@@ -1,0 +1,6 @@
+string station_id
+float64 max_speed
+---
+bool success
+string message
+string task_id
