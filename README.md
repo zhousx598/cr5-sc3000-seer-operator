@@ -1,4 +1,4 @@
-# CR5 · SC3000 · DH-AG95 · SEER AGV 综合上位机
+# 基于越疆-仙工复合机器人开发的综合上位机
 
 面向 Ubuntu 22.04 / ROS 2 Humble 的一体化机器人工作空间。项目将 Dobot CR5、
 末端 DH-AG95 电动夹爪、海康 SC3000 智能相机、AprilTag 2.5D 定位和 SEER AGV
