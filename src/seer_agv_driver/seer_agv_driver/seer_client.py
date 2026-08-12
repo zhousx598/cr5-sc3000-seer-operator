@@ -50,6 +50,7 @@ API_JOG = ApiSpec(PORT_CONTROL, 2010, 12010)
 API_LOAD_MAP = ApiSpec(PORT_CONTROL, 2022, 12022)
 API_CANCEL_NAV = ApiSpec(PORT_NAV, 3003, 13003)
 API_GOTO_STATION = ApiSpec(PORT_NAV, 3051, 13051)
+API_PLAN_TO_STATION = ApiSpec(PORT_NAV, 3053, 13053)
 API_DOWNLOAD_MAP = ApiSpec(PORT_CONFIG, 4011, 14011)
 
 
@@ -370,6 +371,25 @@ class SeerClient:
     def get_stations(self) -> dict[str, Any]:
         return self.request(API_STATIONS).body or {}
 
+    def get_path_to_station(
+        self, target_station_id: str
+    ) -> list[str]:
+        target = target_station_id.strip()
+        if not target:
+            raise SeerApiError('target station ID must not be empty')
+        body = self.request(
+            API_PLAN_TO_STATION,
+            {'id': target},
+        ).body or {}
+        path = body.get('path', []) if isinstance(body, dict) else []
+        if not isinstance(path, list) or not all(
+            isinstance(value, str) and value for value in path
+        ):
+            raise SeerApiError(
+                'SEER API 3053 returned an invalid station path'
+            )
+        return path
+
     def download_model(self) -> dict[str, Any]:
         return self.request(API_DOWNLOAD_MODEL, timeout=max(10.0, self.timeout)).body or {}
 
@@ -432,6 +452,7 @@ class SeerClient:
         max_wspeed: float = 0.2,
         max_acc: float = 0.1,
         max_wacc: float = 0.1,
+        target_yaw: float | None = None,
     ) -> dict[str, Any]:
         body: dict[str, Any] = {
             "source_id": source_id,
@@ -443,7 +464,54 @@ class SeerClient:
         }
         if task_id:
             body["task_id"] = task_id
-        return self.request(API_GOTO_STATION, body, timeout=max(5.0, self.timeout)).body or {}
+        if target_yaw is not None:
+            yaw = float(target_yaw)
+            if not math.isfinite(yaw):
+                raise SeerApiError('target_yaw must be finite')
+            body['angle'] = math.atan2(math.sin(yaw), math.cos(yaw))
+        return self.request(
+            API_GOTO_STATION, body, timeout=max(5.0, self.timeout)
+        ).body or {}
+
+    def goto_pose(
+        self,
+        x: float,
+        y: float,
+        yaw: float,
+        task_id: str,
+        max_speed: float = 0.08,
+    ) -> dict[str, Any]:
+        """Navigate to a world pose with Robokit's documented goPath script."""
+        values = (float(x), float(y), float(yaw), float(max_speed))
+        if not all(math.isfinite(value) for value in values):
+            raise SeerApiError('world pose and speed must be finite')
+        if not task_id.strip():
+            raise SeerApiError('task_id must not be empty')
+        normalized_yaw = math.atan2(math.sin(values[2]), math.cos(values[2]))
+        body = {
+            'script_name': 'syspy/goPath.py',
+            'script_args': {
+                'x': values[0],
+                'y': values[1],
+                'theta': normalized_yaw,
+                'coordinate': 'world',
+                'reachAngle': math.radians(3.0),
+                'reachDist': 0.03,
+                'backMode': 0,
+                'useOdo': 0,
+            },
+            'operation': 'Script',
+            'id': 'SELF_POSITION',
+            'source_id': 'SELF_POSITION',
+            'task_id': task_id.strip(),
+            'max_speed': max(0.01, min(values[3], 0.2)),
+            'max_wspeed': 0.2,
+            'max_acc': 0.1,
+            'max_wacc': 0.1,
+        }
+        return self.request(
+            API_GOTO_STATION, body, timeout=max(5.0, self.timeout)
+        ).body or {}
 
     def download_map(self, map_name: str) -> dict[str, Any]:
         return self.request(API_DOWNLOAD_MAP, {"map_name": map_name}, timeout=max(15.0, self.timeout)).body or {}

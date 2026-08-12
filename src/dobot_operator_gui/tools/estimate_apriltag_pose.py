@@ -96,10 +96,18 @@ def detect_tags(image: np.ndarray, family: str):
     dictionary = cv2.aruco.getPredefinedDictionary(
         APRILTAG_DICTIONARIES[family]
     )
-    parameters = cv2.aruco.DetectorParameters()
+    if hasattr(cv2.aruco, 'DetectorParameters'):
+        parameters = cv2.aruco.DetectorParameters()
+    else:
+        parameters = cv2.aruco.DetectorParameters_create()
     parameters.cornerRefinementMethod = cv2.aruco.CORNER_REFINE_APRILTAG
-    detector = cv2.aruco.ArucoDetector(dictionary, parameters)
-    corners, ids, rejected = detector.detectMarkers(image)
+    if hasattr(cv2.aruco, 'ArucoDetector'):
+        detector = cv2.aruco.ArucoDetector(dictionary, parameters)
+        corners, ids, rejected = detector.detectMarkers(image)
+    else:
+        corners, ids, rejected = cv2.aruco.detectMarkers(
+            image, dictionary, parameters=parameters
+        )
     if ids is None:
         return [], rejected
     return [

@@ -31,7 +31,10 @@ source install/setup.bash
 单独运行。
 
 测试数量会随新增用例变化，应以 `pytest` 实际结果为准。
-本次文档整理后的基线为 **106 passed**。
+加入 AGV 姿态航点、本地航点、路径预览和 AprilTag 到站纠偏队列后的完整离线
+回归基线为 **149 passed**（2026-08-12；包含 Dashboard 状态接口失败时的实时反馈
+兜底用例）。数量会随用例增加而变化，不要只运行
+新增用例后宣称全部回归通过。
 
 ## 2. 真机分阶段验收
 
@@ -87,7 +90,7 @@ ros2 pkg prefix dobot_point_manager
 
 ### `feedback` 的 `feed_v` 属性不存在
 
-这是旧驱动在 30004 初次连接失败后仍进入定时回调造成的二次异常。本项目已修复
+这是旧驱动在反馈端口初次连接失败后仍进入定时回调造成的二次异常。本项目已修复
 为 `None` 防护和定时重连。若仍出现，说明运行的是旧 `install/`，请重新构建并
 重启 launch。
 
@@ -101,7 +104,8 @@ ros2 service call /dobot_bringup_v3/srv/GetAngle \
 ros2 topic echo /joint_states_robot --once
 ```
 
-若 GetAngle 非零但话题全零，检查 30004 反馈节点、完整帧 magic 和是否运行旧版本。
+若 GetAngle 非零但话题全零，确认 `DOBOT_FEEDBACK_PORT=30005`，再检查反馈节点、
+完整帧 magic 和是否运行旧版本。当前 CR5 的 30004 只握手而不发送反馈字节。
 
 ### `Sync` 超时且服务全部卡住
 
@@ -170,11 +174,22 @@ ros2 service call /seer_agv/download_map std_srvs/srv/Trigger "{}"
 ### VPN/TUN 导致端口假阳性
 
 ```bash
-ip -br link show enp4s0
+ip -br link show enp88s0
+ip route get 192.168.192.201
 ip route get 192.168.192.5
+ip route get 192.168.192.11
 ```
 
-必须显示有线载波和正确 `dev enp4s0`。启动器已经同时检查载波、路由和端口。
+三条设备路由必须显示 `dev enp88s0 src 192.168.192.104`。启动器已经同时检查
+AGV 的载波、路由和端口；VPN/Mihomo/TUN 不得接管机器人子网。
+
+### 用户航点看不到或路径预览为空
+
+- 用户航点按当前地图名称隔离，确认地图没有切换；
+- 检查 `~/dobot_ws/agv_waypoints.json` 是否可读，但不要手工写入非有限数值；
+- 3053 只支持“当前位置到官方站点”，本地用户航点不会出现在 3053 结果中；
+- Robokit 3.4.4.6 不支持任意站点间 1303，程序有意不调用该接口；
+- 路径预览为空不授权运动，先在控制器端确认地图、站点和定位状态。
 
 ## 7. 上位机打不开
 

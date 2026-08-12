@@ -3,6 +3,7 @@ from pathlib import Path
 
 import pytest
 
+from dobot_operator_gui.core import check_tcp_ports
 from dobot_operator_gui.core import list_point_names
 from dobot_operator_gui.core import load_point
 from dobot_operator_gui.core import max_joint_error_deg
@@ -13,6 +14,35 @@ from dobot_operator_gui.core import point_image_path
 from dobot_operator_gui.core import save_capture_group
 from dobot_operator_gui.core import save_point
 from dobot_operator_gui.core import validate_point_name
+
+
+def test_connectivity_check_uses_wired_cr5_ports_by_default(monkeypatch):
+    observed = []
+
+    class Connection:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, exc_type, exc_value, traceback):
+            return False
+
+    def fake_create_connection(address, timeout):
+        observed.append((address, timeout))
+        return Connection()
+
+    monkeypatch.setattr(
+        'dobot_operator_gui.core.socket.create_connection',
+        fake_create_connection,
+    )
+
+    result = check_tcp_ports('192.168.192.201')
+
+    assert result == {29999: '可连接', 30003: '可连接', 30005: '可连接'}
+    assert [address for address, _ in observed] == [
+        ('192.168.192.201', 29999),
+        ('192.168.192.201', 30003),
+        ('192.168.192.201', 30005),
+    ]
 
 
 def test_parse_existing_ros_response():

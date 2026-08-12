@@ -79,6 +79,30 @@ MyType = np.dtype([('len',np.int64,), ('digital_input_bits',np.uint64,), ('digit
 FEEDBACK_PACKET_SIZE = MyType.itemsize
 FEEDBACK_PERIOD_SEC = 0.01
 RECONNECT_INTERVAL_SEC = 2.0
+DEFAULT_FEEDBACK_PORT = 30005
+ALLOWED_FEEDBACK_PORTS = (30004, 30005)
+
+
+def resolve_feedback_port(value=None):
+    """Return the validated CR5 feedback port from the environment."""
+    raw_value = os.getenv("DOBOT_FEEDBACK_PORT") if value is None else value
+    if raw_value is None:
+        return DEFAULT_FEEDBACK_PORT
+
+    try:
+        port = int(str(raw_value).strip())
+    except (TypeError, ValueError) as exc:
+        raise ValueError(
+            "DOBOT_FEEDBACK_PORT must be numeric and one of 30004 or 30005; "
+            f"got {raw_value!r}"
+        ) from exc
+
+    if port not in ALLOWED_FEEDBACK_PORTS:
+        raise ValueError(
+            "DOBOT_FEEDBACK_PORT must be 30004 or 30005; "
+            f"got {port}"
+        )
+    return port
 
 
 
@@ -90,7 +114,7 @@ class fankuis():
         self.socket_feedback = None
         self._buffer = bytearray()
 
-        if self.port not in (30004, 30005):
+        if self.port not in ALLOWED_FEEDBACK_PORTS:
             raise ValueError(
                 f"Feedback server requires port 30004 or 30005, got {self.port}"
             )
@@ -147,6 +171,7 @@ class PublisherNode(Node):
         self.IP = os.getenv("IP_address")
         if not self.IP:
             raise RuntimeError("Environment variable IP_address is not set")
+        self.feedback_port = resolve_feedback_port()
         self.feed_v = None
         self._next_reconnect_at = 0.0
         self.pub = self.create_publisher(ToolVectorActual, "dobot_msgs_v3/msg/ToolVectorActual", 10)
@@ -158,20 +183,23 @@ class PublisherNode(Node):
         if self.feed_v is not None:
             return True
 
-        self.get_logger().info(f"connection:{self.IP}:30004")
+        self.get_logger().info(f"connection:{self.IP}:{self.feedback_port}")
         try:
-            feed_v = fankuis(self.IP, 30004)
+            feed_v = fankuis(self.IP, self.feedback_port)
         except (OSError, ValueError) as exc:
             self._next_reconnect_at = time.monotonic() + RECONNECT_INTERVAL_SEC
             self.get_logger().warning(
-                f"连接 {self.IP}:30004 失败：{type(exc).__name__}: {exc}；"
+                f"连接 {self.IP}:{self.feedback_port} 失败："
+                f"{type(exc).__name__}: {exc}；"
                 f"{RECONNECT_INTERVAL_SEC:.0f} 秒后重试"
             )
             return False
 
         self.feed_v = feed_v
         self._next_reconnect_at = 0.0
-        self.get_logger().info(f"connection succeeded:{self.IP}:30004")
+        self.get_logger().info(
+            f"connection succeeded:{self.IP}:{self.feedback_port}"
+        )
         return True
 
     def disconnect(self, reason=None):
@@ -182,7 +210,8 @@ class PublisherNode(Node):
         self._next_reconnect_at = time.monotonic() + RECONNECT_INTERVAL_SEC
         if reason is not None:
             self.get_logger().warning(
-                f"反馈连接已断开：{type(reason).__name__}: {reason}；"
+                f"反馈连接 {self.IP}:{self.feedback_port} 已断开："
+                f"{type(reason).__name__}: {reason}；"
                 f"{RECONNECT_INTERVAL_SEC:.0f} 秒后重试"
             )
 

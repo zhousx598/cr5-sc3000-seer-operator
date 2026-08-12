@@ -7,7 +7,9 @@ find_package(rosidl_default_generators REQUIRED)
 rosidl_generate_interfaces(${PROJECT_NAME}
   "srv/ConfirmLocalization.srv"
   "srv/LoadMap.srv"
+  "srv/NavigateToPose.srv"
   "srv/NavigateToStation.srv"
+  "srv/PlanToStation.srv"
   "srv/Relocalize.srv"
 )
 

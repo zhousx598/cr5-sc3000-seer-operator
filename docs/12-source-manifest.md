@@ -20,7 +20,7 @@ URDF、RViz、Gazebo 和 MoveIt 文件保持设备方包结构；本项目直接
 |---|---|
 | [`dobot_api.py`](../src/DOBOT_6Axis_ROS2_V3/dobot_bringup_v3/dobot_bringup_v3/dobot_api.py) | Dashboard/运动 socket、Modbus 和 SafeSkin 命令 |
 | [`dobot_bringup.py`](../src/DOBOT_6Axis_ROS2_V3/dobot_bringup_v3/dobot_bringup_v3/dobot_bringup.py) | ROS 服务、连接恢复、报警解析和异常边界 |
-| [`feedback.py`](../src/DOBOT_6Axis_ROS2_V3/dobot_bringup_v3/dobot_bringup_v3/feedback.py) | 30004 完整帧、重连和状态发布 |
+| [`feedback.py`](../src/DOBOT_6Axis_ROS2_V3/dobot_bringup_v3/dobot_bringup_v3/feedback.py) | 默认30005（兼容30004）的完整帧、重连和状态发布 |
 | [`SetSafeSkin.srv`](../src/DOBOT_6Axis_ROS2_V3/dobot_msgs_v3/srv/SetSafeSkin.srv) | 电子皮肤开关服务定义 |
 | [`test_connection_recovery.py`](../src/DOBOT_6Axis_ROS2_V3/dobot_bringup_v3/test/test_connection_recovery.py) | socket/节点恢复回归 |
 | [`test_modbus_commands.py`](../src/DOBOT_6Axis_ROS2_V3/dobot_bringup_v3/test/test_modbus_commands.py) | Modbus 帧与参数校验 |
@@ -51,13 +51,15 @@ URDF、RViz、Gazebo 和 MoveIt 文件保持设备方包结构；本项目直接
 |---|---|
 | [`main.py`](../src/dobot_operator_gui/dobot_operator_gui/main.py) | ROS/Qt 进程入口 |
 | [`main_window.py`](../src/dobot_operator_gui/dobot_operator_gui/main_window.py) | 页面、按钮、异步任务和安全回滚 |
-| [`ros_client.py`](../src/dobot_operator_gui/dobot_operator_gui/ros_client.py) | CR5、夹爪和 AGV ROS 门面 |
+| [`ros_client.py`](../src/dobot_operator_gui/dobot_operator_gui/ros_client.py) | CR5、夹爪和 AGV ROS 门面及导航到站等待 |
 | [`core.py`](../src/dobot_operator_gui/dobot_operator_gui/core.py) | 连通检查、点位/采集组原子写入 |
 | [`camera_capture.py`](../src/dobot_operator_gui/dobot_operator_gui/camera_capture.py) | SC3000 FTP + Modbus 触发和预览帧 |
 | [`apriltag_localization.py`](../src/dobot_operator_gui/dobot_operator_gui/apriltag_localization.py) | 标签检测、PnP 和图像叠加 |
 | [`handeye_transform.py`](../src/dobot_operator_gui/dobot_operator_gui/handeye_transform.py) | `tool0_T_camera` 与基座坐标换算 |
-| [`task_queue.py`](../src/dobot_operator_gui/dobot_operator_gui/task_queue.py) | 队列 schema、校验和串行执行 |
-| [`agv_map_widget.py`](../src/dobot_operator_gui/dobot_operator_gui/agv_map_widget.py) | 地图绘制、交互和车体位置 |
+| [`visual_correction.py`](../src/dobot_operator_gui/dobot_operator_gui/visual_correction.py) | 参考/实时标签变换、多帧一致性、6D纠偏和目标重算 |
+| [`task_queue.py`](../src/dobot_operator_gui/dobot_operator_gui/task_queue.py) | AGV导航、视觉纠偏、机械臂/夹爪队列 schema、校验和串行执行 |
+| [`agv_map_widget.py`](../src/dobot_operator_gui/dobot_operator_gui/agv_map_widget.py) | 统一AGV地图、车体/航点姿态、路径图层和点选交互 |
+| [`agv_waypoints.py`](../src/dobot_operator_gui/dobot_operator_gui/agv_waypoints.py) | 按地图隔离的本地AGV航点校验和原子保存 |
 
 ### 标定和诊断工具
 
@@ -70,8 +72,9 @@ URDF、RViz、Gazebo 和 MoveIt 文件保持设备方包结构；本项目直接
 
 ### 测试
 
-`test/` 中的九个用例文件分别覆盖 AGV ROS 桥、AprilTag、相机协议、采点核心、拖动
-保护、夹爪请求、手眼变换、Qt 插件环境和任务队列：
+`test/` 中的用例覆盖 AGV ROS 桥、AprilTag、相机协议、采点核心、拖动保护、夹爪
+请求、手眼变换、视觉纠偏、笛卡尔运动、Qt 插件环境、Dashboard/30005 状态反馈
+兜底和任务队列：
 
 [`test_agv_ros_bridge.py`](../src/dobot_operator_gui/test/test_agv_ros_bridge.py)、
 [`test_apriltag_localization.py`](../src/dobot_operator_gui/test/test_apriltag_localization.py)、
@@ -80,7 +83,12 @@ URDF、RViz、Gazebo 和 MoveIt 文件保持设备方包结构；本项目直接
 [`test_drag_safety.py`](../src/dobot_operator_gui/test/test_drag_safety.py)、
 [`test_gripper_requests.py`](../src/dobot_operator_gui/test/test_gripper_requests.py)、
 [`test_handeye_transform.py`](../src/dobot_operator_gui/test/test_handeye_transform.py)、
+[`test_visual_correction.py`](../src/dobot_operator_gui/test/test_visual_correction.py)、
+[`test_cartesian_motion.py`](../src/dobot_operator_gui/test/test_cartesian_motion.py)、
 [`test_qt_plugin_path.py`](../src/dobot_operator_gui/test/test_qt_plugin_path.py)、
+[`test_main_window_layout.py`](../src/dobot_operator_gui/test/test_main_window_layout.py)、
+[`test_agv_waypoints.py`](../src/dobot_operator_gui/test/test_agv_waypoints.py)、
+[`test_robot_feedback_fallback.py`](../src/dobot_operator_gui/test/test_robot_feedback_fallback.py)、
 [`test_task_queue.py`](../src/dobot_operator_gui/test/test_task_queue.py)。
 
 ## 5. SEER AGV 驱动与接口
@@ -105,6 +113,8 @@ URDF、RViz、Gazebo 和 MoveIt 文件保持设备方包结构；本项目直接
 - [`ConfirmLocalization.srv`](../src/seer_agv_msgs/srv/ConfirmLocalization.srv)；
 - [`LoadMap.srv`](../src/seer_agv_msgs/srv/LoadMap.srv)；
 - [`NavigateToStation.srv`](../src/seer_agv_msgs/srv/NavigateToStation.srv)；
+- [`NavigateToPose.srv`](../src/seer_agv_msgs/srv/NavigateToPose.srv)；
+- [`PlanToStation.srv`](../src/seer_agv_msgs/srv/PlanToStation.srv)；
 - [`Relocalize.srv`](../src/seer_agv_msgs/srv/Relocalize.srv)。
 
 ## 6. 运行期文件约定
@@ -113,6 +123,7 @@ URDF、RViz、Gazebo 和 MoveIt 文件保持设备方包结构；本项目直接
 
 - `points/`：点位、图像、内参和手眼结果；
 - `queues/`：任务队列；
+- `agv_waypoints.json`：按地图隔离的本地用户航点；
 - `apriltag_validation/`：外参验证数据；
 - `build/`、`install/`、`log/`：colcon/ROS 产物。
 

@@ -60,7 +60,9 @@
 | `tools/calibrate_handeye_first20.py` | 眼在手上标定和多算法一致性验证 |
 
 测试目录覆盖点位、拖动保护回滚、Modbus 请求、队列、相机、AprilTag、手眼变换、
-Qt 环境和 AGV ROS 桥。
+Qt 环境和 AGV ROS 桥。`ros_client.py` 还会缓存 30005 驱动发布的关节角和末端位姿；
+当 Dashboard 的 `GetAngle`/`GetPose` 被控制器拒绝时，仅在反馈未超过两秒的前提下
+用于界面状态兜底，过期数据仍按失败处理。
 
 ## 5. `seer_agv_driver` 和 `seer_agv_msgs`
 

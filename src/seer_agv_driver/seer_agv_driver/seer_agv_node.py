@@ -20,7 +20,8 @@ from visualization_msgs.msg import Marker, MarkerArray
 
 from seer_agv_driver.seer_client import DEFAULT_HOST, Footprint, SeerClient, SafetyState
 from seer_agv_driver.seer_client import evaluate_safety_state
-from seer_agv_msgs.srv import ConfirmLocalization, LoadMap, NavigateToStation
+from seer_agv_msgs.srv import ConfirmLocalization, LoadMap, NavigateToPose
+from seer_agv_msgs.srv import NavigateToStation, PlanToStation
 from seer_agv_msgs.srv import Relocalize
 
 
@@ -191,6 +192,18 @@ class SeerAgvNode(Node):
             NavigateToStation,
             "/seer_agv/navigate_to_station",
             self._handle_navigate_to_station,
+            callback_group=self._service_group,
+        )
+        self.navigate_pose_srv = self.create_service(
+            NavigateToPose,
+            "/seer_agv/navigate_to_pose",
+            self._handle_navigate_to_pose,
+            callback_group=self._service_group,
+        )
+        self.plan_to_station_srv = self.create_service(
+            PlanToStation,
+            "/seer_agv/plan_to_station",
+            self._handle_plan_to_station,
             callback_group=self._service_group,
         )
 
@@ -383,7 +396,8 @@ class SeerAgvNode(Node):
             sent_cmd = self._sent_cmd
             fast_fresh = (
                 self._last_fast_status_time > 0.0
-                and now - self._last_fast_status_time <= self.fast_status_timeout_sec
+                and now - self._last_fast_status_time
+                <= self.fast_status_timeout_sec
             )
             slow_fresh = self._slow_status_is_fresh(now)
 
@@ -958,6 +972,13 @@ class SeerAgvNode(Node):
                 f"max_speed must be 0.01..{self.max_navigation_speed:.2f} m/s"
             )
             return response
+        target_yaw = None
+        if request.use_target_yaw:
+            target_yaw = float(request.target_yaw)
+            if not math.isfinite(target_yaw):
+                response.success = False
+                response.message = "target_yaw must be finite"
+                return response
 
         now = time.monotonic()
         with self._state_lock:
@@ -978,7 +999,9 @@ class SeerAgvNode(Node):
 
         with self._state_lock:
             self._target_cmd = (0.0, 0.0, 0.0)
-        if not self._send_stop("switching from teleop to navigation", force=True):
+        if not self._send_stop(
+            "switching from teleop to navigation", force=True
+        ):
             response.success = False
             response.message = "failed to confirm stop before navigation"
             return response
@@ -992,6 +1015,7 @@ class SeerAgvNode(Node):
                 max_wspeed=0.2,
                 max_acc=0.1,
                 max_wacc=0.1,
+                target_yaw=target_yaw,
             )
             response.success = True
             response.task_id = task_id
@@ -999,6 +1023,99 @@ class SeerAgvNode(Node):
         except Exception as exc:
             response.success = False
             response.task_id = task_id
+            response.message = str(exc)
+        return response
+
+    def _handle_navigate_to_pose(
+        self,
+        request: NavigateToPose.Request,
+        response: NavigateToPose.Response,
+    ) -> NavigateToPose.Response:
+        waypoint_name = request.waypoint_name.strip()
+        values = (
+            float(request.x),
+            float(request.y),
+            float(request.yaw),
+            float(request.max_speed),
+        )
+        if not waypoint_name:
+            response.success = False
+            response.message = "waypoint_name must not be empty"
+            return response
+        if not all(math.isfinite(value) for value in values):
+            response.success = False
+            response.message = "waypoint pose and speed must be finite"
+            return response
+        speed = values[3] if values[3] > 0.0 else 0.08
+        if not 0.01 <= speed <= self.max_navigation_speed:
+            response.success = False
+            response.message = (
+                f"max_speed must be 0.01..{self.max_navigation_speed:.2f} m/s"
+            )
+            return response
+
+        now = time.monotonic()
+        with self._state_lock:
+            safety = self._last_status
+            fresh = (
+                safety is not None
+                and now - self._last_fast_status_time
+                <= self.fast_status_timeout_sec
+                and self._slow_status_is_fresh(now)
+            )
+        if not fresh or safety is None:
+            response.success = False
+            response.message = "status incomplete or stale"
+            return response
+        if not safety.safe_to_start_navigation:
+            response.success = False
+            response.message = safety.teleop_reason or "navigation inhibited"
+            return response
+
+        with self._state_lock:
+            self._target_cmd = (0.0, 0.0, 0.0)
+        if not self._send_stop(
+            "switching from teleop to pose navigation", force=True
+        ):
+            response.success = False
+            response.message = "failed to confirm stop before navigation"
+            return response
+
+        task_id = f"gui_pose_{uuid.uuid4().hex}"
+        try:
+            body = self.client.goto_pose(
+                values[0],
+                values[1],
+                values[2],
+                task_id=task_id,
+                max_speed=speed,
+            )
+            response.success = True
+            response.task_id = task_id
+            response.message = json.dumps(body, ensure_ascii=False)
+        except Exception as exc:
+            response.success = False
+            response.task_id = task_id
+            response.message = str(exc)
+        return response
+
+    def _handle_plan_to_station(
+        self,
+        request: PlanToStation.Request,
+        response: PlanToStation.Response,
+    ) -> PlanToStation.Response:
+        target = request.target_station_id.strip()
+        if not target:
+            response.success = False
+            response.message = "target station ID must not be empty"
+            return response
+        try:
+            station_ids = self.client.get_path_to_station(target)
+            response.success = True
+            response.station_ids = station_ids
+            response.message = " -> ".join(station_ids)
+        except Exception as exc:
+            response.success = False
             response.message = str(exc)
         return response
 

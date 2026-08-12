@@ -89,12 +89,13 @@ colcon build --symlink-install --packages-up-to \
 ```bash
 export DOBOT_WS="${HOME}/dobot_ws"
 export DOBOT_TYPE=cr5
-export IP_address=192.168.1.6
+export IP_address=192.168.192.201
+export DOBOT_FEEDBACK_PORT=30005
 export SC3000_IP=192.168.192.11
 export SC3000_FTP_USER=sc3000
 export SC3000_FTP_PASSWORD='<相机任务中配置的FTP口令>'
 export SEER_AGV_HOST=192.168.192.5
-export SEER_AGV_INTERFACE=enp4s0
+export SEER_AGV_INTERFACE=enp88s0
 ```
 
 `DOBOT_WS` 未设置时，工具默认使用 `$HOME/dobot_ws`。
@@ -109,7 +110,8 @@ SC3000 程序保留设备出厂示例账号的兼容默认值；生产部署应�
 source /opt/ros/humble/setup.bash
 source "${DOBOT_WS}/install/setup.bash"
 export DOBOT_TYPE=cr5
-export IP_address=192.168.1.6
+export IP_address=192.168.192.201
+export DOBOT_FEEDBACK_PORT=30005
 ros2 launch dobot_bringup_v3 dobot_bringup_ros2.launch.py
 ```
 

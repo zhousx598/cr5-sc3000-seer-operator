@@ -14,7 +14,9 @@
 - 安全进入拖动模式，取点并原子保存关节角、末端位姿和 SC3000 图像；
 - 低速关节点运动，不使用会阻塞官方驱动的 `Sync()`；
 - 控制末端 RS485 上的 DH-AG95，包括初始化、夹持力、开度和反馈；
-- 串行执行“点位运动—夹爪—等待”任务队列；
+- 串行执行“AGV航点导航—点位运动—夹爪—等待”任务队列；
+- 在任务队列中测量固定 AprilTag 的 6D 到站偏差，并将同一纠偏量应用到接近、
+  按压和撤回等多个 Tool0 笛卡尔点位；
 - 以 FTP + Modbus TCP 获取 SC3000 图像，目标预览速率 5 FPS；
 - 棋盘格内参标定、AprilTag `solvePnP`、眼在手上手眼标定；
 - 实时输出 AprilTag 的相机坐标和 CR5 User0/基座坐标；
@@ -36,6 +38,7 @@ flowchart LR
 
     GUI --> ROS
     ROS -->|ROS services| DB -->|29999 / 30003| ARM
+    ARM -->|30005 实时反馈| DB
     ARM -->|末端 RS485| GRIP
     CAM -->|FTP 2121 + passive ports| GUI
     GUI -->|Modbus TCP 502| CAM
@@ -61,7 +64,8 @@ source install/setup.bash
 
 ```bash
 export DOBOT_TYPE=cr5
-export IP_address=192.168.1.6       # 根据现场改为实际地址
+export IP_address=192.168.192.201
+export DOBOT_FEEDBACK_PORT=30005
 ros2 launch dobot_bringup_v3 dobot_bringup_ros2.launch.py
 ```
 
@@ -118,7 +122,8 @@ dobot_ws/
 - SC3000，1408×1024，FTP + Modbus TCP；
 - AprilTag `tag36h11`，现场黑框边长 58.5 mm；
 - SEER Robokit 3.4.4.6；
-- 驱动恢复、协议、算法、GUI 和安全状态机功能测试共 106 项通过。
+- 驱动恢复、协议、视觉纠偏、GUI 和安全状态机功能测试共 149 项通过
+  （2026-08-12，系统 ROS/Python 环境）。
 
 现场 IP、相机内参、手眼外参、末端负载和地图名称都是部署数据，不是跨设备通用
 参数。复制本仓库后必须重新确认或重新标定。

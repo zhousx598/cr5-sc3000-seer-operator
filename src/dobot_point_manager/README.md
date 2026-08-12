@@ -28,7 +28,7 @@ bringup 的单线程回调；控制器队列暂停时，它可能连带堵住所
 cd ~/dobot_ws
 source /opt/ros/humble/setup.bash
 colcon build --symlink-install --packages-select dobot_point_manager
-source ~/dobot_ws/install/setup.sh
+source ~/dobot_ws/install/setup.bash
 ```
 
 ## 预览 P1 到 P2

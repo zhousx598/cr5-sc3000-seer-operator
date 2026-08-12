@@ -1,0 +1,5 @@
+string target_station_id
+---
+bool success
+string message
+string[] station_ids

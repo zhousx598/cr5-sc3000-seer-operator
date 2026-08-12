@@ -18,13 +18,15 @@ recorded in the handoff package):
 - Control port `19205`: `2000` stop, `2002` relocalize, `2003` confirm
   localization, `2004` cancel relocalization, `2010` open-loop motion,
   `2022` switch loaded map
-- Navigation port `19206`: `3003` cancel navigation, `3051` station navigation
+- Navigation port `19206`: `3003` cancel navigation, `3051` station/world-pose
+  navigation, `3053` current-to-station path preview
 - Config port `19207`: `4011` download map
 
-Deliberately not implemented yet:
+Deliberately not implemented:
 
-- `3053` path preview and `3066` specified-path navigation
-- arbitrary-coordinate/custom-path execution
+- `3066` operator-specified path execution
+- arbitrary station-to-station API `1303`, because it requires Robokit
+  `3.4.5.26+` while the deployed controller is `3.4.4.6`
 - map upload/delete APIs
 
 ## Run
@@ -86,7 +88,12 @@ Services:
   verified `2002`; it never confirms the result automatically
 - `/seer_agv/cancel_relocalization` (`std_srvs/Trigger`) sends verified `2004`
 - `/seer_agv/navigate_to_station` (`seer_agv_msgs/NavigateToStation`) sends
-  verified `3051` only after the common safety gate passes
+  verified `3051` with the optional saved station heading only after the common
+  safety gate passes
+- `/seer_agv/navigate_to_pose` (`seer_agv_msgs/NavigateToPose`) sends documented
+  `3051` `syspy/goPath.py` world `x/y/theta` arguments after the same safety gate
+- `/seer_agv/plan_to_station` (`seer_agv_msgs/PlanToStation`) queries verified
+  `3053` and returns the planned official-station sequence without moving
 
 Map switching and relocation require a fresh stationary status and explicit
 `operator_confirmed=true`.  Switching a map invalidates localization.  After

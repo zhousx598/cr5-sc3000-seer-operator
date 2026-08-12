@@ -14,6 +14,7 @@
 | EnableRobot / DisableRobot | 同名类型 | 使能/下使能 |
 | SpeedFactor | `SpeedFactor` | 全局速度百分比 |
 | JointMovJ | `JointMovJ` | 关节目标和动态参数 |
+| MovJ / MovL | 同名类型 | 纠偏后的 User0/Tool0 笛卡尔关节/直线运动 |
 | StartDrag / StopDrag | 同名类型 | 拖动模式 |
 | SetCollisionLevel | 同名类型 | 本体碰撞等级 0～5 |
 | SetSafeSkin | 同名类型 | SafeSkin：0 关，1 开 |
@@ -62,6 +63,8 @@ AGV 反馈。二者用于区分 GUI 问题与底盘安全拦截。
 | `/seer_agv/cancel_relocalization` | `std_srvs/Trigger` | 2004 |
 | `/seer_agv/confirm_localization` | `ConfirmLocalization` | 2003 |
 | `/seer_agv/navigate_to_station` | `NavigateToStation` | 3051 |
+| `/seer_agv/navigate_to_pose` | `NavigateToPose` | 3051 `goPath.py` |
+| `/seer_agv/plan_to_station` | `PlanToStation` | 3053 |
 | `/seer_agv/cancel_nav` | `std_srvs/Trigger` | 3003 |
 
 危险状态改变服务含 `operator_confirmed` 和/或 GUI 位姿快照，不能用来绕过现场确认。
@@ -87,4 +90,5 @@ Modbus 使用功能码 0x06 写单个 holding register、0x03 读 holding regist
 - 可用时的 CR5 基座坐标及手眼标定文件来源。
 
 队列 JSON 的 schema 见[夹爪与任务队列](05-dh-ag95-and-queue.md)。
-
+本地 AGV 用户航点使用 schema 1 的 `~/dobot_ws/agv_waypoints.json`，按地图名称保存
+`name/x/y/yaw`；`yaw` 单位为弧度。

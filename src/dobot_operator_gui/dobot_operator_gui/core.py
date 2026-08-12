@@ -318,7 +318,7 @@ def point_image_path(points_dir: Path, name: str) -> Path | None:
 
 def check_tcp_ports(
     host: str,
-    ports: Sequence[int] = (29999, 30003, 30004),
+    ports: Sequence[int] = (29999, 30003, 30005),
     timeout: float = 1.0,
 ) -> dict[int, str]:
     """Check Dobot TCP ports without treating an ICMP result as authoritative."""

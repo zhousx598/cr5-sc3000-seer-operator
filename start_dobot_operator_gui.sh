@@ -25,8 +25,10 @@ mkdir -p "${log_dir}"
 agv_pid=""
 gui_pid=""
 cleanup_started=0
+export IP_address="${IP_address:-192.168.192.201}"
+export DOBOT_FEEDBACK_PORT="${DOBOT_FEEDBACK_PORT:-30005}"
 agv_host="${SEER_AGV_HOST:-192.168.192.5}"
-agv_interface="${SEER_AGV_INTERFACE:-enp4s0}"
+agv_interface="${SEER_AGV_INTERFACE:-enp88s0}"
 
 cleanup() {
     if [ "${cleanup_started}" -ne 0 ]; then

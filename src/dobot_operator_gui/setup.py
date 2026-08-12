@@ -7,7 +7,7 @@ package_name = 'dobot_operator_gui'
 
 setup(
     name=package_name,
-    version='0.6.0',
+    version='0.10.0',
     packages=find_packages(exclude=['test']),
     data_files=[
         (

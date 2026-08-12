@@ -25,6 +25,66 @@ def move_command(point='P1'):
     )
 
 
+def agv_navigation_command(station='LM1'):
+    return QueueCommand(
+        'agv_navigate_station',
+        {
+            'station_id': station,
+            'max_speed_mps': 0.08,
+            'timeout_s': 300,
+        },
+    )
+
+
+def agv_pose_navigation_command(name='LOCAL1'):
+    return QueueCommand(
+        'agv_navigate_pose',
+        {
+            'waypoint_name': name,
+            'x': 1.2,
+            'y': -0.4,
+            'yaw': 0.5,
+            'max_speed_mps': 0.05,
+            'timeout_s': 300,
+        },
+    )
+
+
+def correction_command(reference='REF'):
+    return QueueCommand(
+        'measure_apriltag_correction',
+        {
+            'reference_capture': reference,
+            'family': 'tag36h11',
+            'tag_id': 0,
+            'tag_size_mm': 58.5,
+            'camera_host': '192.168.192.11',
+            'camera_timeout_s': 12,
+            'samples': 3,
+            'max_reprojection_rms_px': 1.5,
+            'max_translation_mm': 50,
+            'max_rotation_deg': 5,
+            'max_sample_translation_spread_mm': 2,
+            'max_sample_rotation_spread_deg': 1,
+        },
+    )
+
+
+def corrected_move_command(point='P1'):
+    return QueueCommand(
+        'move_point_corrected',
+        {
+            'point': point,
+            'motion_type': 'linear',
+            'speed_factor': 5,
+            'speed': 5,
+            'acc': 5,
+            'position_tolerance_mm': 1,
+            'orientation_tolerance_deg': 1,
+        },
+    )
+
+
 def test_close_percent_maps_to_ag95_position():
     assert close_percent_to_position(0) == 1000
     assert close_percent_to_position(50) == 500
@@ -89,6 +149,45 @@ class FakeRosClient:
         )
         progress('moving')
 
+    def agv_navigate_and_wait(
+        self,
+        station_id,
+        max_speed_mps,
+        timeout_s,
+        cancel_event,
+        progress,
+    ):
+        self.calls.append(
+            ('agv', station_id, max_speed_mps, timeout_s)
+        )
+        progress('navigating')
+        return not cancel_event.is_set()
+
+    def agv_navigate_pose_and_wait(
+        self,
+        waypoint_name,
+        x,
+        y,
+        yaw,
+        max_speed_mps,
+        timeout_s,
+        cancel_event,
+        progress,
+    ):
+        self.calls.append(
+            (
+                'agv_pose',
+                waypoint_name,
+                x,
+                y,
+                yaw,
+                max_speed_mps,
+                timeout_s,
+            )
+        )
+        progress('pose navigating')
+        return not cancel_event.is_set()
+
     def set_gripper_force(self, force):
         self.calls.append(('force', force))
 
@@ -97,6 +196,41 @@ class FakeRosClient:
 
     def initialize_gripper_and_wait(self):
         self.calls.append(('initialize',))
+
+    def move_to_pose(
+        self,
+        target,
+        motion_type,
+        speed_factor,
+        speed,
+        acc,
+        position_tolerance_mm,
+        orientation_tolerance_deg,
+        progress,
+    ):
+        self.calls.append(
+            (
+                'pose',
+                tuple(target),
+                motion_type,
+                speed_factor,
+                speed,
+                acc,
+                position_tolerance_mm,
+                orientation_tolerance_deg,
+            )
+        )
+        progress('pose moving')
+        return tuple(target)
+
+
+class FakeCorrection:
+    summary = 'test correction'
+
+    def corrected_pose(self, pose):
+        result = list(pose)
+        result[0] += 10
+        return tuple(result)
 
 
 def test_runner_executes_steps_in_order(tmp_path: Path):
@@ -130,6 +264,89 @@ def test_runner_executes_steps_in_order(tmp_path: Path):
     ) == 3
 
 
+def test_runner_can_navigate_before_visual_correction(tmp_path: Path):
+    save_point(
+        tmp_path,
+        'P1',
+        (1, 2, 3, 4, 5, 6),
+        (100, 200, 300, 10, 20, 30),
+    )
+
+    ros = FakeRosClient()
+    result = TaskQueueRunner(
+        ros,
+        lambda unused_params, unused_dir, unused_cancel, unused_progress: (
+            FakeCorrection()
+        ),
+    ).run(
+        [
+            agv_navigation_command(),
+            correction_command(),
+            corrected_move_command(),
+        ],
+        tmp_path,
+        threading.Event(),
+    )
+
+    assert result.completed == 3
+    assert ros.calls[0] == ('agv', 'LM1', 0.08, 300.0)
+    assert ros.calls[1][0] == 'pose'
+
+
+def test_runner_executes_local_pose_navigation(tmp_path: Path):
+    ros = FakeRosClient()
+
+    result = TaskQueueRunner(ros).run(
+        [agv_pose_navigation_command()],
+        tmp_path,
+        threading.Event(),
+    )
+
+    assert result.completed == 1
+    assert ros.calls == [
+        ('agv_pose', 'LOCAL1', 1.2, -0.4, 0.5, 0.05, 300.0)
+    ]
+
+
+@pytest.mark.parametrize(
+    'params',
+    [
+        {
+            'waypoint_name': '',
+            'x': 1.0,
+            'y': 2.0,
+            'yaw': 0.0,
+            'max_speed_mps': 0.05,
+            'timeout_s': 300,
+        },
+        {
+            'waypoint_name': 'P1',
+            'x': float('nan'),
+            'y': 2.0,
+            'yaw': 0.0,
+            'max_speed_mps': 0.05,
+            'timeout_s': 300,
+        },
+    ],
+)
+def test_reject_invalid_agv_pose_navigation_command(params):
+    with pytest.raises(OperatorInputError):
+        QueueCommand('agv_navigate_pose', params)
+
+
+@pytest.mark.parametrize(
+    'params',
+    [
+        {'station_id': '', 'max_speed_mps': 0.08, 'timeout_s': 300},
+        {'station_id': 'LM1', 'max_speed_mps': 0.5, 'timeout_s': 300},
+        {'station_id': 'LM1', 'max_speed_mps': 0.08, 'timeout_s': 2},
+    ],
+)
+def test_reject_invalid_agv_navigation_command(params):
+    with pytest.raises(OperatorInputError):
+        QueueCommand('agv_navigate_station', params)
+
+
 def test_runner_respects_stop_before_first_step(tmp_path: Path):
     ros = FakeRosClient()
     cancel = threading.Event()
@@ -147,3 +364,71 @@ def test_runner_respects_stop_before_first_step(tmp_path: Path):
     assert result.cancelled is True
     assert ros.calls == []
     assert events[0][1] == 'skipped'
+
+
+def test_runner_measures_once_then_executes_corrected_pose(tmp_path: Path):
+    save_point(
+        tmp_path,
+        'P1',
+        (1, 2, 3, 4, 5, 6),
+        (100, 200, 300, 10, 20, 30),
+    )
+    provider_calls = []
+
+    def provider(params, points_dir, cancel_event, progress):
+        provider_calls.append((params['reference_capture'], points_dir))
+        progress('measured')
+        return FakeCorrection()
+
+    ros = FakeRosClient()
+    result = TaskQueueRunner(ros, provider).run(
+        [correction_command(), corrected_move_command()],
+        tmp_path,
+        threading.Event(),
+    )
+
+    assert result.completed == 2
+    assert provider_calls == [('REF', tmp_path)]
+    assert ros.calls == [
+        ('pose', (110, 200, 300, 10, 20, 30), 'linear', 5, 5, 5, 1.0, 1.0)
+    ]
+
+
+def test_corrected_move_rejects_missing_measurement(tmp_path: Path):
+    save_point(
+        tmp_path,
+        'P1',
+        (1, 2, 3, 4, 5, 6),
+        (100, 200, 300, 10, 20, 30),
+    )
+    with pytest.raises(OperatorInputError, match='没有成功执行'):
+        TaskQueueRunner(FakeRosClient()).run(
+            [corrected_move_command()], tmp_path, threading.Event()
+        )
+
+
+def test_agv_navigation_invalidates_previous_visual_correction(
+    tmp_path: Path,
+):
+    save_point(
+        tmp_path,
+        'P1',
+        (1, 2, 3, 4, 5, 6),
+        (100, 200, 300, 10, 20, 30),
+    )
+    provider = (
+        lambda unused_params, unused_dir, unused_cancel, unused_progress: (
+            FakeCorrection()
+        )
+    )
+
+    with pytest.raises(OperatorInputError, match='没有成功执行'):
+        TaskQueueRunner(FakeRosClient(), provider).run(
+            [
+                correction_command(),
+                agv_navigation_command(),
+                corrected_move_command(),
+            ],
+            tmp_path,
+            threading.Event(),
+        )

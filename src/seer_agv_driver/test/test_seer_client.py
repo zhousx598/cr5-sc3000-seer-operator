@@ -1,4 +1,5 @@
 import json
+import math
 import struct
 import sys
 from pathlib import Path
@@ -14,6 +15,7 @@ from seer_agv_driver.seer_client import (
     API_GOTO_STATION,
     API_JOG,
     API_LOAD_MAP,
+    API_PLAN_TO_STATION,
     API_RELOCALIZE,
     API_STOP,
     HEADER,
@@ -172,6 +174,77 @@ def test_goto_station_uses_verified_navigation_api_and_limits(monkeypatch):
         "max_wacc": 0.3,
         "task_id": "test",
     }
+
+
+def test_goto_station_can_enforce_saved_station_heading(monkeypatch):
+    client = SeerClient()
+    calls = []
+
+    def fake_request(spec, body_obj=None, timeout=None):
+        calls.append((spec, body_obj, timeout))
+        return type("Resp", (), {"body": {"ret_code": 0}})()
+
+    monkeypatch.setattr(client, "request", fake_request)
+    client.goto_station("LM2", task_id="test", target_yaw=3 * math.pi)
+
+    assert calls[0][0] == API_GOTO_STATION
+    assert calls[0][1]["angle"] == pytest.approx(math.pi)
+
+
+def test_goto_pose_uses_documented_world_path_script(monkeypatch):
+    client = SeerClient()
+    calls = []
+
+    def fake_request(spec, body_obj=None, timeout=None):
+        calls.append((spec, body_obj, timeout))
+        return type("Resp", (), {"body": {"ret_code": 0}})()
+
+    monkeypatch.setattr(client, "request", fake_request)
+    client.goto_pose(1.2, -0.4, -0.5, "local-P1", max_speed=9.0)
+
+    assert calls[0][0] == API_GOTO_STATION
+    body = calls[0][1]
+    assert body["script_name"] == "syspy/goPath.py"
+    assert body["operation"] == "Script"
+    assert body["source_id"] == "SELF_POSITION"
+    assert body["id"] == "SELF_POSITION"
+    assert body["task_id"] == "local-P1"
+    assert body["max_speed"] == 0.2
+    assert body["script_args"] == {
+        "x": 1.2,
+        "y": -0.4,
+        "theta": -0.5,
+        "coordinate": "world",
+        "reachAngle": pytest.approx(math.radians(3.0)),
+        "reachDist": 0.03,
+        "backMode": 0,
+        "useOdo": 0,
+    }
+
+
+def test_plan_to_station_uses_3053_and_validates_path(monkeypatch):
+    client = SeerClient()
+    calls = []
+
+    def fake_request(spec, body_obj=None, timeout=None):
+        calls.append((spec, body_obj, timeout))
+        return type(
+            "Resp", (), {"body": {"ret_code": 0, "path": ["LM1", "LM2"]}}
+        )()
+
+    monkeypatch.setattr(client, "request", fake_request)
+    assert client.get_path_to_station("LM2") == ["LM1", "LM2"]
+    assert calls[0][:2] == (API_PLAN_TO_STATION, {"id": "LM2"})
+
+    monkeypatch.setattr(
+        client,
+        "request",
+        lambda *unused_args, **unused_kwargs: type(
+            "Resp", (), {"body": {"ret_code": 0, "path": [123]}}
+        )(),
+    )
+    with pytest.raises(SeerApiError, match="invalid station path"):
+        client.get_path_to_station("LM2")
 
 
 def test_map_and_relocalization_request_bodies(monkeypatch):

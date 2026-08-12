@@ -35,8 +35,10 @@ from PyQt5.QtWidgets import QListWidget
 from PyQt5.QtWidgets import QMainWindow
 from PyQt5.QtWidgets import QMessageBox
 from PyQt5.QtWidgets import QPushButton
+from PyQt5.QtWidgets import QScrollArea
 from PyQt5.QtWidgets import QSlider
 from PyQt5.QtWidgets import QSpinBox
+from PyQt5.QtWidgets import QSplitter
 from PyQt5.QtWidgets import QTabWidget
 from PyQt5.QtWidgets import QTableWidget
 from PyQt5.QtWidgets import QTableWidgetItem
@@ -50,6 +52,7 @@ from .core import list_point_names
 from .core import load_point
 from .core import max_joint_error_deg
 from .core import mode_text
+from .core import OperatorInputError
 from .core import point_image_path
 from .core import save_capture_group
 from .core import save_point
@@ -61,11 +64,19 @@ from .handeye_transform import HandEyeTransform
 from .handeye_transform import HandEyeTransformError
 from .ros_client import DobotRosClient
 from .agv_map_widget import AgvMapWidget
+from .agv_waypoints import AgvWaypoint
+from .agv_waypoints import AgvWaypointError
+from .agv_waypoints import delete_waypoint
+from .agv_waypoints import load_waypoints
+from .agv_waypoints import upsert_waypoint
 from .task_queue import load_queue
 from .task_queue import QueueCommand
 from .task_queue import QueueRunResult
 from .task_queue import save_queue
 from .task_queue import TaskQueueRunner
+from .visual_correction import build_visual_correction
+from .visual_correction import load_reference_tag_transform
+from .visual_correction import VisualCorrectionError
 
 
 class AppSignals(QObject):
@@ -91,6 +102,7 @@ class DobotOperatorWindow(QMainWindow):
         ).expanduser()
         self.points_dir = self.workspace_dir / 'points'
         self.queues_dir = self.workspace_dir / 'queues'
+        self.agv_waypoints_path = self.workspace_dir / 'agv_waypoints.json'
         self.camera_inbox = Path('/dev/shm/dobot_operator_gui_sc3000')
         self.camera = Sc3000CameraCapture()
         self.apriltag_localizer = None
@@ -134,6 +146,9 @@ class DobotOperatorWindow(QMainWindow):
         self._agv_teleop_active = False
         self._agv_pressed_button: QPushButton | None = None
         self._agv_map_generation = -1
+        self._agv_current_map = ''
+        self._agv_user_waypoints: list[AgvWaypoint] = []
+        self._agv_planned_station_ids: tuple[str, ...] = ()
 
         self.setWindowTitle('CR5 · SC3000 · SEER AGV 综合上位机')
         self.resize(1220, 800)
@@ -228,13 +243,11 @@ class DobotOperatorWindow(QMainWindow):
         root.addWidget(header)
 
         self.tabs = QTabWidget()
-        self.tabs.addTab(self._build_connection_tab(), '连接与状态')
-        self.tabs.addTab(self._build_robot_tab(), '机械臂控制')
+        self.tabs.addTab(self._build_status_log_tab(), '连接、状态与日志')
+        self.tabs.addTab(self._build_robot_gripper_tab(), '机械臂与DH-AG95')
         self.tabs.addTab(self._build_points_tab(), '取点与点位运动')
-        self.tabs.addTab(self._build_gripper_tab(), 'DH-AG95夹爪')
         self.tabs.addTab(self._build_queue_tab(), '任务队列')
-        self.tabs.addTab(self._build_agv_tab(), 'SEER AGV')
-        self.tabs.addTab(self._build_log_tab(), '运行日志')
+        self.tabs.addTab(self._build_agv_combined_tab(), 'SEER AGV综合控制')
         root.addWidget(self.tabs, 1)
 
         self.operation_status = QLabel('就绪')
@@ -244,6 +257,54 @@ class DobotOperatorWindow(QMainWindow):
         root.addWidget(self.operation_status)
         self.setCentralWidget(central)
 
+    def _build_scrollable_tab(
+        self, sections: tuple[QWidget, ...]
+    ) -> QWidget:
+        page = QWidget()
+        page_layout = QVBoxLayout(page)
+        page_layout.setContentsMargins(0, 0, 0, 0)
+        scroll = QScrollArea()
+        scroll.setWidgetResizable(True)
+        scroll.setFrameShape(QFrame.NoFrame)
+        scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarAsNeeded)
+        scroll.setVerticalScrollBarPolicy(Qt.ScrollBarAsNeeded)
+        content = QWidget()
+        content_layout = QVBoxLayout(content)
+        content_layout.setContentsMargins(8, 8, 8, 8)
+        content_layout.setSpacing(10)
+        for section in sections:
+            content_layout.addWidget(section)
+        content_layout.addStretch()
+        scroll.setWidget(content)
+        page_layout.addWidget(scroll)
+        return page
+
+    def _build_status_log_tab(self) -> QWidget:
+        page = QWidget()
+        layout = QVBoxLayout(page)
+        splitter = QSplitter(Qt.Vertical)
+        splitter.addWidget(self._build_connection_tab())
+        splitter.addWidget(self._build_log_tab())
+        splitter.setStretchFactor(0, 1)
+        splitter.setStretchFactor(1, 1)
+        splitter.setSizes([430, 330])
+        layout.addWidget(splitter)
+        return page
+
+    def _build_robot_gripper_tab(self) -> QWidget:
+        return self._build_scrollable_tab(
+            (self._build_robot_tab(), self._build_gripper_tab())
+        )
+
+    def _build_agv_combined_tab(self) -> QWidget:
+        return self._build_scrollable_tab(
+            (
+                self._build_agv_tab(),
+                self._build_agv_map_tab(),
+                self._build_agv_waypoint_tab(),
+            )
+        )
+
     def _build_connection_tab(self) -> QWidget:
         page = QWidget()
         layout = QVBoxLayout(page)
@@ -251,7 +312,7 @@ class DobotOperatorWindow(QMainWindow):
         target_group = QGroupBox('连接目标')
         target_layout = QHBoxLayout(target_group)
         target_layout.addWidget(QLabel('机械臂 IP：'))
-        self.ip_edit = QLineEdit(os.getenv('IP_address', '192.168.100.6'))
+        self.ip_edit = QLineEdit(os.getenv('IP_address', '192.168.192.201'))
         self.ip_edit.setMaximumWidth(220)
         target_layout.addWidget(self.ip_edit)
         check_button = QPushButton('检查连通性')
@@ -286,21 +347,45 @@ class DobotOperatorWindow(QMainWindow):
             grid.addWidget(name_label, row, 0, alignment=Qt.AlignTop)
             grid.addWidget(value, row, 1)
         grid.setColumnStretch(1, 1)
-        map_group = QGroupBox('实时地图与AGV位置（ROS数据）')
+        layout.addWidget(status_group)
+
+        note = QLabel(
+            '说明：ROS驱动可用时，上位机不会再主动建立29999/30003/30005探测连接，'
+            '以免干扰正在运行的控制会话。'
+        )
+        note.setWordWrap(True)
+        note.setStyleSheet('color: #64748b; padding: 8px;')
+        layout.addWidget(note)
+        layout.addStretch()
+        return page
+
+    def _build_agv_map_tab(self) -> QWidget:
+        page = QWidget()
+        layout = QVBoxLayout(page)
+
+        map_group = QGroupBox('统一AGV地图：位置、航点、朝向与规划路径')
         map_view_layout = QVBoxLayout(map_group)
         self.agv_map_widget = AgvMapWidget()
         self.agv_map_widget.relocationPointSelected.connect(
-            self._agv_map_point_selected
+            self._agv_unified_map_point_selected
         )
+        map_click_layout = QHBoxLayout()
+        map_click_layout.addWidget(QLabel('地图左键点击用途'))
+        self.agv_map_click_target_combo = QComboBox()
+        self.agv_map_click_target_combo.addItem(
+            '填入重定位 X/Y', 'relocation'
+        )
+        self.agv_map_click_target_combo.addItem(
+            '填入用户航点 X/Y', 'waypoint'
+        )
+        map_click_layout.addWidget(self.agv_map_click_target_combo)
+        map_click_layout.addStretch()
         reset_map_view_button = QPushButton('地图视图自动适配')
         reset_map_view_button.clicked.connect(self.agv_map_widget.reset_view)
+        map_click_layout.addWidget(reset_map_view_button)
         map_view_layout.addWidget(self.agv_map_widget, 1)
-        map_view_layout.addWidget(reset_map_view_button, alignment=Qt.AlignRight)
-
-        overview_layout = QHBoxLayout()
-        overview_layout.addWidget(map_group, 3)
-        overview_layout.addWidget(status_group, 2)
-        layout.addLayout(overview_layout, 1)
+        map_view_layout.addLayout(map_click_layout)
+        layout.addWidget(map_group)
 
         map_control_group = QGroupBox('地图加载与重定位')
         map_control_layout = QGridLayout(map_control_group)
@@ -358,13 +443,12 @@ class DobotOperatorWindow(QMainWindow):
         layout.addWidget(map_control_group)
 
         note = QLabel(
-            '说明：ROS驱动可用时，上位机不会再主动建立29999/30003/30004探测连接，'
-            '以免干扰正在运行的控制会话。'
+            '地图加载、重定位和定位确认会改变AGV状态。请先核对现场车体位置、'
+            '车头方向和地图名称，再执行相应操作。'
         )
         note.setWordWrap(True)
         note.setStyleSheet('color: #64748b; padding: 8px;')
         layout.addWidget(note)
-        layout.addStretch()
         return page
 
     def _build_robot_tab(self) -> QWidget:
@@ -730,7 +814,11 @@ class DobotOperatorWindow(QMainWindow):
         builder = QGridLayout(builder_group)
         self.queue_kind_combo = QComboBox()
         for text, kind in (
+            ('AGV导航到航点', 'agv_navigate_station'),
+            ('AGV导航到用户航点', 'agv_navigate_pose'),
             ('移动到点位', 'move_point'),
+            ('测量AprilTag纠偏', 'measure_apriltag_correction'),
+            ('移动到纠偏点位', 'move_point_corrected'),
             ('夹爪闭合比例', 'gripper_close_percent'),
             ('夹爪目标位置', 'gripper_position'),
             ('设置夹持力', 'gripper_force'),
@@ -742,6 +830,7 @@ class DobotOperatorWindow(QMainWindow):
             self._queue_kind_changed
         )
         self.queue_point_combo = QComboBox()
+        self.queue_point_label = QLabel('目标点位')
         self.queue_value_label = QLabel('数值')
         self.queue_value_spin = QDoubleSpinBox()
 
@@ -765,7 +854,7 @@ class DobotOperatorWindow(QMainWindow):
 
         builder.addWidget(QLabel('指令类型'), 0, 0)
         builder.addWidget(self.queue_kind_combo, 1, 0)
-        builder.addWidget(QLabel('目标点位'), 0, 1)
+        builder.addWidget(self.queue_point_label, 0, 1)
         builder.addWidget(self.queue_point_combo, 1, 1)
         builder.addWidget(self.queue_value_label, 0, 2)
         builder.addWidget(self.queue_value_spin, 1, 2)
@@ -779,6 +868,130 @@ class DobotOperatorWindow(QMainWindow):
         builder.addWidget(self.queue_tolerance_spin, 1, 6)
         builder.addWidget(add_button, 1, 7)
         layout.addWidget(builder_group)
+
+        agv_queue_group = QGroupBox('AGV队列导航参数')
+        agv_queue_layout = QGridLayout(agv_queue_group)
+        self.queue_agv_station_combo = QComboBox()
+        self.queue_agv_waypoint_combo = QComboBox()
+        self.queue_agv_speed_spin = QDoubleSpinBox()
+        self.queue_agv_speed_spin.setRange(0.01, 0.20)
+        self.queue_agv_speed_spin.setDecimals(2)
+        self.queue_agv_speed_spin.setSingleStep(0.01)
+        self.queue_agv_speed_spin.setValue(0.08)
+        self.queue_agv_speed_spin.setSuffix(' m/s')
+        self.queue_agv_timeout_spin = QDoubleSpinBox()
+        self.queue_agv_timeout_spin.setRange(10.0, 3600.0)
+        self.queue_agv_timeout_spin.setDecimals(0)
+        self.queue_agv_timeout_spin.setValue(300.0)
+        self.queue_agv_timeout_spin.setSuffix(' 秒')
+        agv_fields = (
+            ('官方站点', self.queue_agv_station_combo),
+            ('用户航点', self.queue_agv_waypoint_combo),
+            ('最大速度', self.queue_agv_speed_spin),
+            ('到站超时', self.queue_agv_timeout_spin),
+        )
+        self.queue_agv_common_widgets = []
+        self.queue_agv_station_widgets = []
+        self.queue_agv_waypoint_widgets = []
+        for column, (label_text, widget) in enumerate(agv_fields):
+            label = QLabel(label_text)
+            agv_queue_layout.addWidget(label, 0, column)
+            agv_queue_layout.addWidget(widget, 1, column)
+            pair = (label, widget)
+            if column == 0:
+                self.queue_agv_station_widgets.extend(pair)
+            elif column == 1:
+                self.queue_agv_waypoint_widgets.extend(pair)
+            else:
+                self.queue_agv_common_widgets.extend(pair)
+        layout.addWidget(agv_queue_group)
+
+        correction_group = QGroupBox('AprilTag视觉纠偏参数')
+        correction_layout = QGridLayout(correction_group)
+        self.queue_visual_family_combo = QComboBox()
+        for family in APRILTAG_DICTIONARIES:
+            self.queue_visual_family_combo.addItem(family, family)
+        self.queue_visual_family_combo.setCurrentIndex(
+            self.queue_visual_family_combo.findData('tag36h11')
+        )
+        self.queue_visual_id_spin = QSpinBox()
+        self.queue_visual_id_spin.setRange(0, 999999)
+        self.queue_visual_id_spin.setValue(0)
+        self.queue_visual_size_spin = QDoubleSpinBox()
+        self.queue_visual_size_spin.setRange(0.1, 1000.0)
+        self.queue_visual_size_spin.setDecimals(3)
+        self.queue_visual_size_spin.setValue(58.5)
+        self.queue_visual_size_spin.setSuffix(' mm')
+        self.queue_visual_samples_spin = QSpinBox()
+        self.queue_visual_samples_spin.setRange(1, 10)
+        self.queue_visual_samples_spin.setValue(3)
+        self.queue_visual_reprojection_spin = QDoubleSpinBox()
+        self.queue_visual_reprojection_spin.setRange(0.05, 10.0)
+        self.queue_visual_reprojection_spin.setDecimals(2)
+        self.queue_visual_reprojection_spin.setValue(1.5)
+        self.queue_visual_reprojection_spin.setSuffix(' px')
+        self.queue_visual_translation_limit_spin = QDoubleSpinBox()
+        self.queue_visual_translation_limit_spin.setRange(0.1, 500.0)
+        self.queue_visual_translation_limit_spin.setDecimals(1)
+        self.queue_visual_translation_limit_spin.setValue(50.0)
+        self.queue_visual_translation_limit_spin.setSuffix(' mm')
+        self.queue_visual_rotation_limit_spin = QDoubleSpinBox()
+        self.queue_visual_rotation_limit_spin.setRange(0.1, 45.0)
+        self.queue_visual_rotation_limit_spin.setDecimals(1)
+        self.queue_visual_rotation_limit_spin.setValue(5.0)
+        self.queue_visual_rotation_limit_spin.setSuffix(' °')
+        self.queue_visual_translation_spread_spin = QDoubleSpinBox()
+        self.queue_visual_translation_spread_spin.setRange(0.05, 20.0)
+        self.queue_visual_translation_spread_spin.setDecimals(2)
+        self.queue_visual_translation_spread_spin.setValue(2.0)
+        self.queue_visual_translation_spread_spin.setSuffix(' mm')
+        self.queue_visual_rotation_spread_spin = QDoubleSpinBox()
+        self.queue_visual_rotation_spread_spin.setRange(0.05, 10.0)
+        self.queue_visual_rotation_spread_spin.setDecimals(2)
+        self.queue_visual_rotation_spread_spin.setValue(1.0)
+        self.queue_visual_rotation_spread_spin.setSuffix(' °')
+        self.queue_corrected_motion_combo = QComboBox()
+        self.queue_corrected_motion_combo.addItem('关节路径 MovJ', 'joint')
+        self.queue_corrected_motion_combo.addItem('直线路径 MovL', 'linear')
+        self.queue_corrected_position_tolerance_spin = QDoubleSpinBox()
+        self.queue_corrected_position_tolerance_spin.setRange(0.1, 20.0)
+        self.queue_corrected_position_tolerance_spin.setDecimals(2)
+        self.queue_corrected_position_tolerance_spin.setValue(1.0)
+        self.queue_corrected_position_tolerance_spin.setSuffix(' mm')
+        self.queue_corrected_orientation_tolerance_spin = QDoubleSpinBox()
+        self.queue_corrected_orientation_tolerance_spin.setRange(0.1, 5.0)
+        self.queue_corrected_orientation_tolerance_spin.setDecimals(2)
+        self.queue_corrected_orientation_tolerance_spin.setValue(1.0)
+        self.queue_corrected_orientation_tolerance_spin.setSuffix(' °')
+
+        visual_fields = (
+            ('标签族', self.queue_visual_family_combo),
+            ('标签ID', self.queue_visual_id_spin),
+            ('黑框边长', self.queue_visual_size_spin),
+            ('连续采样', self.queue_visual_samples_spin),
+            ('重投影上限', self.queue_visual_reprojection_spin),
+            ('纠偏平移上限', self.queue_visual_translation_limit_spin),
+            ('纠偏旋转上限', self.queue_visual_rotation_limit_spin),
+            ('多帧平移离散', self.queue_visual_translation_spread_spin),
+            ('多帧旋转离散', self.queue_visual_rotation_spread_spin),
+            ('纠偏运动方式', self.queue_corrected_motion_combo),
+            ('纠偏位置容差', self.queue_corrected_position_tolerance_spin),
+            ('纠偏姿态容差', self.queue_corrected_orientation_tolerance_spin),
+        )
+        self.queue_visual_measure_widgets = []
+        self.queue_visual_move_widgets = []
+        for index, (text, widget) in enumerate(visual_fields):
+            row = (index // 4) * 2
+            column = index % 4
+            label = QLabel(text)
+            correction_layout.addWidget(label, row, column)
+            correction_layout.addWidget(widget, row + 1, column)
+            pair = (label, widget)
+            if index < 9:
+                self.queue_visual_measure_widgets.extend(pair)
+            else:
+                self.queue_visual_move_widgets.extend(pair)
+        layout.addWidget(correction_group)
 
         queue_group = QGroupBox('待执行指令（严格按表格顺序逐条完成）')
         queue_layout = QVBoxLayout(queue_group)
@@ -826,7 +1039,9 @@ class DobotOperatorWindow(QMainWindow):
             'DH-AG95 是直线夹爪，不使用角度指令：“闭合比例”0%表示完全打开，'
             '100%表示完全闭合。执行前需先在夹爪页创建Modbus通道并完成初始化。'
             '“当前步骤后停止”不会中途截断机械臂动作；需要立即停机请使用'
-            '红色急停或实体急停。'
+            '红色急停或实体急停。视觉纠偏必须先测量，再添加一个或多个纠偏点位；'
+            '只执行测量步骤可用于预览纠偏量，不会运动。AGV导航开始前必须确保'
+            '机械臂已经收回到安全运输姿态；停止队列时，正在执行的AGV导航会取消。'
         )
         note.setWordWrap(True)
         note.setStyleSheet(
@@ -834,6 +1049,124 @@ class DobotOperatorWindow(QMainWindow):
         )
         layout.addWidget(note)
         self._queue_kind_changed()
+        return page
+
+    def _build_agv_waypoint_tab(self) -> QWidget:
+        page = QWidget()
+        layout = QVBoxLayout(page)
+
+        waypoint_group = QGroupBox('本地用户航点（按控制器地图名称隔离保存）')
+        waypoint_layout = QGridLayout(waypoint_group)
+        self.agv_waypoint_map_label = QLabel('当前地图：--')
+        self.agv_waypoint_combo = QComboBox()
+        self.agv_waypoint_combo.currentIndexChanged.connect(
+            self._agv_waypoint_selected
+        )
+        self.agv_waypoint_name_edit = QLineEdit()
+        self.agv_waypoint_name_edit.setPlaceholderText('例如 BUTTON_STATION_VIEW')
+        self.agv_waypoint_x_spin = QDoubleSpinBox()
+        self.agv_waypoint_y_spin = QDoubleSpinBox()
+        for spin in (self.agv_waypoint_x_spin, self.agv_waypoint_y_spin):
+            spin.setRange(-10000.0, 10000.0)
+            spin.setDecimals(3)
+            spin.setSingleStep(0.05)
+            spin.setSuffix(' m')
+        self.agv_waypoint_yaw_spin = QDoubleSpinBox()
+        self.agv_waypoint_yaw_spin.setRange(-180.0, 180.0)
+        self.agv_waypoint_yaw_spin.setDecimals(1)
+        self.agv_waypoint_yaw_spin.setSingleStep(5.0)
+        self.agv_waypoint_yaw_spin.setSuffix('°')
+        self.agv_waypoint_speed_spin = QDoubleSpinBox()
+        self.agv_waypoint_speed_spin.setRange(0.01, 0.08)
+        self.agv_waypoint_speed_spin.setDecimals(2)
+        self.agv_waypoint_speed_spin.setValue(0.05)
+        self.agv_waypoint_speed_spin.setSuffix(' m/s')
+        self.agv_waypoint_timeout_spin = QDoubleSpinBox()
+        self.agv_waypoint_timeout_spin.setRange(10.0, 3600.0)
+        self.agv_waypoint_timeout_spin.setDecimals(0)
+        self.agv_waypoint_timeout_spin.setValue(300.0)
+        self.agv_waypoint_timeout_spin.setSuffix(' 秒')
+
+        fill_pose = QPushButton('读取当前AGV位姿')
+        fill_pose.clicked.connect(self._fill_current_user_waypoint_pose)
+        save_button = QPushButton('新增/更新用户航点')
+        save_button.setObjectName('primary')
+        save_button.clicked.connect(self.save_agv_waypoint)
+        delete_button = QPushButton('删除所选用户航点')
+        delete_button.setObjectName('warning')
+        delete_button.clicked.connect(self.delete_agv_waypoint)
+        return_button = QPushButton('按XYZ+朝向回到所选航点')
+        return_button.setObjectName('primary')
+        return_button.clicked.connect(self.navigate_to_user_waypoint)
+        queue_button = QPushButton('把所选航点加入任务队列')
+        queue_button.clicked.connect(self.add_user_waypoint_to_queue)
+
+        waypoint_layout.addWidget(self.agv_waypoint_map_label, 0, 0)
+        waypoint_layout.addWidget(QLabel('已记录航点'), 0, 1)
+        waypoint_layout.addWidget(self.agv_waypoint_combo, 0, 2, 1, 2)
+        waypoint_layout.addWidget(QLabel('名称'), 1, 0)
+        waypoint_layout.addWidget(self.agv_waypoint_name_edit, 1, 1)
+        waypoint_layout.addWidget(QLabel('X'), 1, 2)
+        waypoint_layout.addWidget(self.agv_waypoint_x_spin, 1, 3)
+        waypoint_layout.addWidget(QLabel('Y'), 1, 4)
+        waypoint_layout.addWidget(self.agv_waypoint_y_spin, 1, 5)
+        waypoint_layout.addWidget(QLabel('车头角'), 1, 6)
+        waypoint_layout.addWidget(self.agv_waypoint_yaw_spin, 1, 7)
+        waypoint_layout.addWidget(QLabel('最大速度'), 2, 0)
+        waypoint_layout.addWidget(self.agv_waypoint_speed_spin, 2, 1)
+        waypoint_layout.addWidget(QLabel('到站超时'), 2, 2)
+        waypoint_layout.addWidget(self.agv_waypoint_timeout_spin, 2, 3)
+        waypoint_layout.addWidget(fill_pose, 2, 4)
+        waypoint_layout.addWidget(save_button, 2, 5)
+        waypoint_layout.addWidget(delete_button, 2, 6)
+        waypoint_layout.addWidget(return_button, 3, 0, 1, 4)
+        waypoint_layout.addWidget(queue_button, 3, 4, 1, 4)
+        layout.addWidget(waypoint_group)
+
+        station_group = QGroupBox('控制器官方站点：姿态回位与路径预览')
+        station_layout = QGridLayout(station_group)
+        self.agv_pose_station_combo = QComboBox()
+        self.agv_pose_station_combo.currentIndexChanged.connect(
+            self._agv_pose_station_selected
+        )
+        self.agv_pose_station_label = QLabel('站点位姿：--')
+        self.agv_pose_station_speed_spin = QDoubleSpinBox()
+        self.agv_pose_station_speed_spin.setRange(0.01, 0.08)
+        self.agv_pose_station_speed_spin.setDecimals(2)
+        self.agv_pose_station_speed_spin.setValue(0.05)
+        self.agv_pose_station_speed_spin.setSuffix(' m/s')
+        station_return = QPushButton('按站点保存姿态导航回位')
+        station_return.setObjectName('primary')
+        station_return.clicked.connect(self.navigate_agv_pose_station)
+        plan_button = QPushButton('预览当前位置到该站的规划路径（3053）')
+        plan_button.clicked.connect(self.plan_agv_to_station)
+        clear_plan_button = QPushButton('清除路径预览')
+        clear_plan_button.clicked.connect(self.clear_agv_path_preview)
+        self.agv_path_result_label = QLabel('规划路径：--')
+        self.agv_path_result_label.setWordWrap(True)
+        station_layout.addWidget(QLabel('目标站点'), 0, 0)
+        station_layout.addWidget(self.agv_pose_station_combo, 0, 1)
+        station_layout.addWidget(self.agv_pose_station_label, 0, 2, 1, 3)
+        station_layout.addWidget(QLabel('最大速度'), 0, 5)
+        station_layout.addWidget(self.agv_pose_station_speed_spin, 0, 6)
+        station_layout.addWidget(station_return, 1, 0, 1, 2)
+        station_layout.addWidget(plan_button, 1, 2, 1, 3)
+        station_layout.addWidget(clear_plan_button, 1, 5, 1, 2)
+        station_layout.addWidget(self.agv_path_result_label, 2, 0, 1, 7)
+        layout.addWidget(station_group)
+
+        note = QLabel(
+            '绿色圆点是控制器官方站点，蓝色菱形是本机用户航点，箭头表示车头朝向。'
+            '两类航点、AGV车体和规划路径统一显示在上方地图中；记录航点时先把地图'
+            '点击用途切换为“填入用户航点 X/Y”。'
+            '用户航点不会写入或覆盖Robokit地图；导航使用厂家文档中的3051 + '
+            'syspy/goPath.py，由控制器在当前地图上规划。3053路径预览只适用于官方站点。'
+        )
+        note.setWordWrap(True)
+        note.setStyleSheet(
+            'background:#e9f3ff; color:#244c6a; padding:8px; border-radius:5px;'
+        )
+        layout.addWidget(note)
         return page
 
     def _build_agv_tab(self) -> QWidget:
@@ -885,7 +1218,7 @@ class DobotOperatorWindow(QMainWindow):
         self.agv_nav_speed_spin.setSingleStep(0.01)
         self.agv_nav_speed_spin.setSuffix(' m/s')
         self.agv_nav_speed_spin.setValue(0.08)
-        self.agv_navigate_button = QPushButton('导航到所选站点')
+        self.agv_navigate_button = QPushButton('按站点姿态导航到所选站点')
         self.agv_navigate_button.setObjectName('primary')
         self.agv_navigate_button.clicked.connect(self.navigate_agv)
         self.agv_cancel_button = QPushButton('取消当前导航')
@@ -1149,8 +1482,15 @@ class DobotOperatorWindow(QMainWindow):
         self.pose_label.setText(
             ', '.join(f'{value:.3f}' for value in status['pose'])
         )
-        self.driver_badge.setText('驱动：已连接')
-        self.driver_badge.setStyleSheet('background:#1b7f50;')
+        fallbacks = tuple(status.get('fallbacks', ()))
+        if fallbacks:
+            self.driver_badge.setText('驱动：已连接（实时反馈兜底）')
+            self.driver_badge.setStyleSheet('background:#9b6800;')
+            self.ros_label.setText('；'.join(fallbacks))
+        else:
+            self.driver_badge.setText('驱动：已连接')
+            self.driver_badge.setStyleSheet('background:#1b7f50;')
+            self.ros_label.setText('Dashboard 状态接口读取正常')
 
     @staticmethod
     def _agv_number(value, decimals: int = 3) -> str:
@@ -1234,6 +1574,9 @@ class DobotOperatorWindow(QMainWindow):
                 for index in range(self.agv_map_combo.count())
             ]
             current_map = str(map_data.get('current_map') or '')
+            if current_map != self._agv_current_map:
+                self._agv_current_map = current_map
+                self._reload_agv_user_waypoints()
             if map_names != existing_maps:
                 self.agv_map_combo.clear()
                 self.agv_map_combo.addItems(map_names)
@@ -1269,17 +1612,22 @@ class DobotOperatorWindow(QMainWindow):
 
         stations = self.ros.agv_stations()
         station_ids = [str(item['id']) for item in stations]
-        current_station = self.agv_station_combo.currentText()
-        existing = [
-            self.agv_station_combo.itemText(index)
-            for index in range(self.agv_station_combo.count())
-        ]
-        if station_ids != existing:
-            self.agv_station_combo.clear()
-            self.agv_station_combo.addItems(station_ids)
-            index = self.agv_station_combo.findText(current_station)
-            if index >= 0:
-                self.agv_station_combo.setCurrentIndex(index)
+        for combo in (
+            self.agv_station_combo,
+            self.queue_agv_station_combo,
+            self.agv_pose_station_combo,
+        ):
+            selected = combo.currentText()
+            existing = [
+                combo.itemText(index) for index in range(combo.count())
+            ]
+            if station_ids != existing:
+                combo.clear()
+                combo.addItems(station_ids)
+                index = combo.findText(selected)
+                if index >= 0:
+                    combo.setCurrentIndex(index)
+        self._agv_pose_station_selected()
 
         self.agv_navigate_button.setEnabled(connected and nav_safe)
         self.agv_cancel_button.setEnabled(
@@ -1398,10 +1746,26 @@ class DobotOperatorWindow(QMainWindow):
             self.agv_teleop_feedback_label.setText('点动指令：已停止（已发布零速度）')
         self.ros.agv_publish_velocity(0.0, 0.0)
 
+    def _agv_unified_map_point_selected(self, x: float, y: float) -> None:
+        target = self.agv_map_click_target_combo.currentData()
+        if target == 'waypoint':
+            self._agv_waypoint_map_point_selected(x, y)
+        else:
+            self._agv_map_point_selected(x, y)
+
     def _agv_map_point_selected(self, x: float, y: float) -> None:
         self.agv_reloc_x_spin.setValue(x)
         self.agv_reloc_y_spin.setValue(y)
-        self.append_log(f'已从地图选择重定位坐标：X={x:.3f} m，Y={y:.3f} m')
+        self.append_log(
+            f'已从统一地图选择重定位坐标：X={x:.3f} m，Y={y:.3f} m'
+        )
+
+    def _agv_waypoint_map_point_selected(self, x: float, y: float) -> None:
+        self.agv_waypoint_x_spin.setValue(x)
+        self.agv_waypoint_y_spin.setValue(y)
+        self.append_log(
+            f'已从统一地图选择用户航点坐标：X={x:.3f} m，Y={y:.3f} m'
+        )
 
     def _agv_relocation_fields_changed(self) -> None:
         self.agv_map_widget.set_relocation_selection(
@@ -1424,6 +1788,336 @@ class DobotOperatorWindow(QMainWindow):
         self.agv_reloc_x_spin.setValue(x)
         self.agv_reloc_y_spin.setValue(y)
         self.agv_reloc_yaw_spin.setValue(float(np.degrees(yaw)))
+
+    def _reload_agv_user_waypoints(self) -> None:
+        self.agv_waypoint_map_label.setText(
+            f'当前地图：{self._agv_current_map or "--"}'
+        )
+        if not self._agv_current_map:
+            self._agv_user_waypoints = []
+        else:
+            try:
+                self._agv_user_waypoints = load_waypoints(
+                    self.agv_waypoints_path, self._agv_current_map
+                )
+            except AgvWaypointError as exc:
+                self._agv_user_waypoints = []
+                self.append_log(f'用户航点加载失败：{exc}')
+        names = [waypoint.name for waypoint in self._agv_user_waypoints]
+        for combo in (
+            self.agv_waypoint_combo,
+            self.queue_agv_waypoint_combo,
+        ):
+            selected = combo.currentText()
+            combo.clear()
+            combo.addItems(names)
+            index = combo.findText(selected)
+            if index >= 0:
+                combo.setCurrentIndex(index)
+        values = [waypoint.to_dict() for waypoint in self._agv_user_waypoints]
+        self.agv_map_widget.set_user_waypoints(values)
+        self._agv_waypoint_selected()
+
+    def _selected_agv_user_waypoint(self) -> AgvWaypoint | None:
+        name = self.agv_waypoint_combo.currentText()
+        return next(
+            (
+                waypoint for waypoint in self._agv_user_waypoints
+                if waypoint.name == name
+            ),
+            None,
+        )
+
+    def _agv_waypoint_selected(self) -> None:
+        waypoint = self._selected_agv_user_waypoint()
+        if waypoint is None:
+            return
+        self.agv_waypoint_name_edit.setText(waypoint.name)
+        self.agv_waypoint_x_spin.setValue(waypoint.x)
+        self.agv_waypoint_y_spin.setValue(waypoint.y)
+        self.agv_waypoint_yaw_spin.setValue(
+            float(np.degrees(waypoint.yaw))
+        )
+        self.agv_map_widget.set_relocation_selection(
+            waypoint.x, waypoint.y
+        )
+
+    def _fill_current_user_waypoint_pose(self) -> None:
+        status = self.ros.agv_status()
+        pose = status.get('pose') if isinstance(status.get('pose'), dict) else {}
+        yaw = pose.get('angle', pose.get('yaw'))
+        try:
+            values = (
+                float(pose.get('x')),
+                float(pose.get('y')),
+                float(yaw),
+            )
+        except (TypeError, ValueError):
+            QMessageBox.warning(self, '位姿不可用', '尚未收到有效AGV地图位姿')
+            return
+        if not all(np.isfinite(value) for value in values):
+            QMessageBox.warning(self, '位姿不可用', 'AGV位姿包含非有限数值')
+            return
+        self.agv_waypoint_x_spin.setValue(values[0])
+        self.agv_waypoint_y_spin.setValue(values[1])
+        self.agv_waypoint_yaw_spin.setValue(float(np.degrees(values[2])))
+
+    def save_agv_waypoint(self) -> None:
+        if not self._agv_current_map:
+            QMessageBox.warning(
+                self, '地图不可用', '请先连接AGV并刷新当前控制器地图'
+            )
+            return
+        try:
+            waypoint = AgvWaypoint(
+                self.agv_waypoint_name_edit.text(),
+                self.agv_waypoint_x_spin.value(),
+                self.agv_waypoint_y_spin.value(),
+                float(np.radians(self.agv_waypoint_yaw_spin.value())),
+            )
+        except AgvWaypointError as exc:
+            QMessageBox.warning(self, '航点参数错误', str(exc))
+            return
+        existing = next(
+            (
+                value for value in self._agv_user_waypoints
+                if value.name == waypoint.name
+            ),
+            None,
+        )
+        if existing is not None and QMessageBox.question(
+            self,
+            '确认更新用户航点',
+            f'航点 {waypoint.name} 已存在，是否用当前XYZ和朝向覆盖？',
+            QMessageBox.Yes | QMessageBox.Cancel,
+            QMessageBox.Cancel,
+        ) != QMessageBox.Yes:
+            return
+        try:
+            upsert_waypoint(
+                self.agv_waypoints_path, self._agv_current_map, waypoint
+            )
+        except AgvWaypointError as exc:
+            QMessageBox.critical(self, '保存用户航点失败', str(exc))
+            return
+        self._reload_agv_user_waypoints()
+        index = self.agv_waypoint_combo.findText(waypoint.name)
+        if index >= 0:
+            self.agv_waypoint_combo.setCurrentIndex(index)
+        self.append_log(
+            f'已保存用户航点 {waypoint.name}：X={waypoint.x:.3f} m，'
+            f'Y={waypoint.y:.3f} m，Yaw={np.degrees(waypoint.yaw):.1f}°'
+        )
+
+    def delete_agv_waypoint(self) -> None:
+        waypoint = self._selected_agv_user_waypoint()
+        if waypoint is None:
+            QMessageBox.warning(self, '未选择航点', '请选择需要删除的用户航点')
+            return
+        if QMessageBox.warning(
+            self,
+            '确认删除用户航点',
+            f'只删除本机地图 {self._agv_current_map} 下的 {waypoint.name}。\n'
+            '不会修改Robokit地图。是否继续？',
+            QMessageBox.Yes | QMessageBox.Cancel,
+            QMessageBox.Cancel,
+        ) != QMessageBox.Yes:
+            return
+        try:
+            delete_waypoint(
+                self.agv_waypoints_path,
+                self._agv_current_map,
+                waypoint.name,
+            )
+        except AgvWaypointError as exc:
+            QMessageBox.critical(self, '删除用户航点失败', str(exc))
+            return
+        self._reload_agv_user_waypoints()
+        self.append_log(f'已删除本机用户航点：{waypoint.name}')
+
+    def _confirm_agv_navigation_ready(self) -> dict | None:
+        status = self.ros.agv_status()
+        if not status.get('safe_to_start_navigation'):
+            QMessageBox.warning(
+                self,
+                'AGV导航被安全门拒绝',
+                str(status.get('teleop_reason') or 'AGV状态不可用'),
+            )
+            return None
+        if self.agv_teleop_enable.isChecked():
+            self.agv_teleop_enable.setChecked(False)
+        return status
+
+    def navigate_to_user_waypoint(self) -> None:
+        waypoint = self._selected_agv_user_waypoint()
+        if waypoint is None:
+            QMessageBox.warning(self, '未选择航点', '请选择用户航点')
+            return
+        if self._confirm_agv_navigation_ready() is None:
+            return
+        speed = self.agv_waypoint_speed_spin.value()
+        if QMessageBox.warning(
+            self,
+            '确认按姿态回到用户航点',
+            f'地图：{self._agv_current_map}\n航点：{waypoint.name}\n'
+            f'X={waypoint.x:.3f} m，Y={waypoint.y:.3f} m，'
+            f'Yaw={np.degrees(waypoint.yaw):.1f}°\n'
+            f'最大速度：{speed:.2f} m/s\n\n'
+            '该功能首次使用尚未在当前Robokit实机验收。请确认机械臂已收回、'
+            '路径无人无障碍，并准备实体急停。',
+            QMessageBox.Yes | QMessageBox.Cancel,
+            QMessageBox.Cancel,
+        ) != QMessageBox.Yes:
+            return
+        self._submit(
+            f'AGV导航到用户航点 {waypoint.name}',
+            lambda: self.ros.agv_navigate_to_pose(
+                waypoint.name,
+                waypoint.x,
+                waypoint.y,
+                waypoint.yaw,
+                speed,
+            ),
+            lambda result: self.append_log(
+                f'AGV用户航点任务已接受：task_id={result[0]}；{result[1]}'
+            ),
+        )
+
+    def add_user_waypoint_to_queue(self) -> None:
+        waypoint = self._selected_agv_user_waypoint()
+        if waypoint is None:
+            QMessageBox.warning(self, '未选择航点', '请选择用户航点')
+            return
+        if not self._queue_editing_allowed():
+            return
+        command = QueueCommand(
+            'agv_navigate_pose',
+            {
+                'waypoint_name': waypoint.name,
+                'x': waypoint.x,
+                'y': waypoint.y,
+                'yaw': waypoint.yaw,
+                'max_speed_mps': self.agv_waypoint_speed_spin.value(),
+                'timeout_s': self.agv_waypoint_timeout_spin.value(),
+            },
+        )
+        self.queue_commands.append(command)
+        self._render_queue_table()
+        self.append_log(f'已把用户航点 {waypoint.name} 加入任务队列')
+
+    def _selected_official_station(self) -> dict | None:
+        station_id = self.agv_pose_station_combo.currentText()
+        return next(
+            (
+                station for station in self.ros.agv_stations()
+                if str(station.get('id')) == station_id
+            ),
+            None,
+        )
+
+    def _agv_pose_station_selected(self) -> None:
+        station = self._selected_official_station()
+        if station is None:
+            self.agv_pose_station_label.setText('站点位姿：--')
+            return
+        yaw = station.get('r', station.get('angle', 0.0))
+        self.agv_pose_station_label.setText(
+            f'站点位姿：X={float(station.get("x", 0.0)):.3f} m，'
+            f'Y={float(station.get("y", 0.0)):.3f} m，'
+            f'Yaw={np.degrees(float(yaw)):.1f}°'
+        )
+
+    def navigate_agv_pose_station(self) -> None:
+        station = self._selected_official_station()
+        if station is None:
+            QMessageBox.warning(self, '未选择站点', '请选择控制器官方站点')
+            return
+        if self._confirm_agv_navigation_ready() is None:
+            return
+        station_id = str(station['id'])
+        yaw = float(station.get('r', station.get('angle', 0.0)))
+        speed = self.agv_pose_station_speed_spin.value()
+        if QMessageBox.warning(
+            self,
+            '确认按官方站点姿态回位',
+            f'站点：{station_id}\nX={float(station["x"]):.3f} m，'
+            f'Y={float(station["y"]):.3f} m，Yaw={np.degrees(yaw):.1f}°\n'
+            f'最大速度：{speed:.2f} m/s\n\n'
+            '确认机械臂已收回，完整路径无人、无线缆和障碍物？',
+            QMessageBox.Yes | QMessageBox.Cancel,
+            QMessageBox.Cancel,
+        ) != QMessageBox.Yes:
+            return
+        self._submit(
+            f'AGV按姿态导航到 {station_id}',
+            lambda: self.ros.agv_navigate_to_station(
+                station_id, speed, target_yaw=yaw
+            ),
+            lambda result: self.append_log(
+                f'AGV姿态回位任务已接受：task_id={result[0]}；{result[1]}'
+            ),
+        )
+
+    def plan_agv_to_station(self) -> None:
+        station = self._selected_official_station()
+        if station is None:
+            QMessageBox.warning(self, '未选择站点', '请选择控制器官方站点')
+            return
+        station_id = str(station['id'])
+        self._submit(
+            f'规划当前位置到 {station_id} 的路径',
+            lambda: self.ros.agv_plan_to_station(station_id),
+            self._show_agv_planned_path,
+        )
+
+    def _show_agv_planned_path(self, station_ids: tuple[str, ...]) -> None:
+        self._agv_planned_station_ids = tuple(station_ids)
+        catalog = {
+            str(station.get('id')): station
+            for station in self.ros.agv_stations()
+        }
+        route = []
+        status = self.ros.agv_status()
+        pose = status.get('pose') if isinstance(status.get('pose'), dict) else {}
+        try:
+            current_yaw = pose.get('angle', pose.get('yaw'))
+            current = {
+                'name': '当前位置',
+                'x': float(pose['x']),
+                'y': float(pose['y']),
+                'yaw': float(current_yaw),
+            }
+            if all(np.isfinite(value) for value in (
+                current['x'], current['y'], current['yaw']
+            )):
+                route.append(current)
+        except (KeyError, TypeError, ValueError):
+            pass
+        missing = []
+        for station_id in station_ids:
+            station = catalog.get(station_id)
+            if station is None:
+                missing.append(station_id)
+                continue
+            route.append(
+                {
+                    'name': station_id,
+                    'x': station.get('x'),
+                    'y': station.get('y'),
+                    'yaw': station.get('r', station.get('angle', 0.0)),
+                }
+            )
+        self.agv_map_widget.set_planned_route(route)
+        text = ' -> '.join(station_ids) if station_ids else '控制器返回空路径'
+        if missing:
+            text += f'；未找到坐标：{", ".join(missing)}'
+        self.agv_path_result_label.setText(f'规划路径：{text}')
+        self.append_log(f'AGV 3053路径预览：{text}')
+
+    def clear_agv_path_preview(self) -> None:
+        self._agv_planned_station_ids = ()
+        self.agv_map_widget.set_planned_route([])
+        self.agv_path_result_label.setText('规划路径：--')
 
     def load_agv_map(self) -> None:
         status = self.ros.agv_status()
@@ -1520,10 +2214,27 @@ class DobotOperatorWindow(QMainWindow):
             )
             return
         speed = self.agv_nav_speed_spin.value()
+        station = next(
+            (
+                item for item in self.ros.agv_stations()
+                if str(item.get('id')) == station_id
+            ),
+            {},
+        )
+        yaw_value = station.get('r', station.get('angle'))
+        try:
+            station_pose = (
+                f'\n站点位姿：X={float(station["x"]):.3f} m，'
+                f'Y={float(station["y"]):.3f} m，'
+                f'Yaw={np.degrees(float(yaw_value)):.1f}°'
+            )
+        except (KeyError, TypeError, ValueError):
+            station_pose = '\n站点位姿：控制器未返回完整XYZ/Yaw'
         if QMessageBox.warning(
             self,
             '确认AGV站点导航',
-            f'目标站点：{station_id}\n最大速度：{speed:.2f} m/s\n\n'
+            f'目标站点：{station_id}{station_pose}\n'
+            f'最大速度：{speed:.2f} m/s\n\n'
             '确认完整路径及AGV周围没有人员、线缆和障碍物？',
             QMessageBox.Yes | QMessageBox.Cancel,
             QMessageBox.Cancel,
@@ -1887,8 +2598,7 @@ class DobotOperatorWindow(QMainWindow):
                                 np.frombuffer(image_data, dtype=np.uint8),
                                 cv2.IMREAD_COLOR,
                             )
-                            localizer = self._get_apriltag_localizer()
-                            detections = localizer.detect(
+                            detections = self._detect_apriltags(
                                 image_array,
                                 apriltag_config['tag_size_mm'],
                                 apriltag_config['family'],
@@ -1926,7 +2636,7 @@ class DobotOperatorWindow(QMainWindow):
                             )
                             previous_tag_error = ''
                             if detections:
-                                annotated = localizer.annotate(
+                                annotated = self._annotate_apriltags(
                                     image_array, detections
                                 )
                                 encoded, buffer = cv2.imencode(
@@ -2006,6 +2716,27 @@ class DobotOperatorWindow(QMainWindow):
                 self.apriltag_localizer = AprilTagLocalizer()
             return self.apriltag_localizer
 
+    def _detect_apriltags(
+        self,
+        image,
+        tag_size_mm: float,
+        family: str,
+        tag_id: int | None,
+    ):
+        """Serialize OpenCV detector use between preview and queue workers."""
+        with self._apriltag_localizer_lock:
+            if self.apriltag_localizer is None:
+                self.apriltag_localizer = AprilTagLocalizer()
+            return self.apriltag_localizer.detect(
+                image, tag_size_mm, family, tag_id
+            )
+
+    def _annotate_apriltags(self, image, detections):
+        with self._apriltag_localizer_lock:
+            if self.apriltag_localizer is None:
+                raise RuntimeError('AprilTag定位器尚未初始化')
+            return self.apriltag_localizer.annotate(image, detections)
+
     def _add_base_poses(
         self, detections: list[dict], tool_pose
     ) -> list[dict]:
@@ -2020,6 +2751,121 @@ class DobotOperatorWindow(QMainWindow):
                 )
             )
         return detections
+
+    def _measure_visual_correction(
+        self,
+        params: dict,
+        points_dir: Path,
+        cancel_event: threading.Event,
+        progress: Callable[[str], None],
+    ):
+        """Measure one queue-scoped B_now_T_tag/B_ref_T_tag correction."""
+        if self.handeye_transform is None:
+            raise VisualCorrectionError(
+                self.handeye_error or '手眼标定变换尚未加载'
+            )
+        reference = load_reference_tag_transform(
+            points_dir,
+            params['reference_capture'],
+            params['family'],
+            params['tag_id'],
+            params['tag_size_mm'],
+            self.handeye_transform,
+            params['max_reprojection_rms_px'],
+        )
+        measurements = []
+        reprojection_errors = []
+        for sample_index in range(params['samples']):
+            if cancel_event.is_set():
+                raise VisualCorrectionError('视觉采样前收到队列停止请求')
+            progress(
+                f'正在采集AprilTag {sample_index + 1}/{params["samples"]}'
+            )
+            before_joints, unused_before_pose, before_mode = (
+                self.ros.capture_stable_state()
+            )
+            if before_mode != '5':
+                raise VisualCorrectionError(
+                    f'视觉纠偏队列要求机械臂模式5，当前模式={before_mode}'
+                )
+            camera_result = None
+            try:
+                camera_result = self.camera.capture(
+                    params['camera_host'],
+                    self.camera_inbox,
+                    timeout=params['camera_timeout_s'],
+                    cancel_event=cancel_event,
+                )
+                image = cv2.imread(
+                    str(camera_result.image_path), cv2.IMREAD_COLOR
+                )
+                if image is None:
+                    raise VisualCorrectionError('SC3000图像解码失败')
+                detections = self._detect_apriltags(
+                    image,
+                    params['tag_size_mm'],
+                    params['family'],
+                    params['tag_id'],
+                )
+            finally:
+                if camera_result is not None:
+                    try:
+                        camera_result.image_path.unlink(missing_ok=True)
+                    except OSError:
+                        pass
+            if len(detections) != 1:
+                raise VisualCorrectionError(
+                    f'实时图像要求唯一 {params["family"]} '
+                    f'ID={params["tag_id"]}，实际 {len(detections)} 个'
+                )
+            detection = detections[0]
+            if (
+                detection.reprojection_rms_px
+                > params['max_reprojection_rms_px']
+            ):
+                raise VisualCorrectionError(
+                    f'第{sample_index + 1}帧重投影误差 '
+                    f'{detection.reprojection_rms_px:.3f} px 超过 '
+                    f'{params["max_reprojection_rms_px"]:.3f} px'
+                )
+            after_joints, after_pose, after_mode = (
+                self.ros.capture_stable_state()
+            )
+            if after_mode != '5':
+                raise VisualCorrectionError(
+                    f'拍照后机械臂模式变为 {after_mode}，本次测量作废'
+                )
+            drift = max_joint_error_deg(before_joints, after_joints)
+            if drift > 0.05:
+                raise VisualCorrectionError(
+                    f'第{sample_index + 1}帧拍照期间关节漂移 '
+                    f'{drift:.3f}°，本次测量作废'
+                )
+            base_pose = self.handeye_transform.transform_detection(
+                after_pose, detection.as_dict()
+            )
+            measurements.append(base_pose['matrix'])
+            reprojection_errors.append(detection.reprojection_rms_px)
+            progress(
+                f'AprilTag {sample_index + 1}/{params["samples"]}：'
+                f'重投影 {detection.reprojection_rms_px:.3f} px'
+            )
+
+        result = build_visual_correction(
+            reference,
+            measurements,
+            reprojection_errors,
+            max_translation_mm=params['max_translation_mm'],
+            max_rotation_deg=params['max_rotation_deg'],
+            max_sample_translation_spread_mm=(
+                params['max_sample_translation_spread_mm']
+            ),
+            max_sample_rotation_spread_deg=(
+                params['max_sample_rotation_spread_deg']
+            ),
+        )
+        progress(result.summary)
+        return result
 
     def _show_apriltag_result(self, result: dict) -> None:
         error = result.get('error', '')
@@ -2213,7 +3059,7 @@ class DobotOperatorWindow(QMainWindow):
                         )
                         tag_detections = [
                             detection.as_dict()
-                            for detection in self._get_apriltag_localizer().detect(
+                            for detection in self._detect_apriltags(
                                 captured_image,
                                 apriltag_config['tag_size_mm'],
                                 apriltag_config['family'],
@@ -2385,15 +3231,37 @@ class DobotOperatorWindow(QMainWindow):
 
     def _queue_kind_changed(self) -> None:
         kind = self.queue_kind_combo.currentData()
-        is_move = kind == 'move_point'
-        self.queue_point_combo.setEnabled(is_move)
+        is_agv_station = kind == 'agv_navigate_station'
+        is_agv_waypoint = kind == 'agv_navigate_pose'
+        is_agv_nav = is_agv_station or is_agv_waypoint
+        is_joint_move = kind == 'move_point'
+        is_visual_measure = kind == 'measure_apriltag_correction'
+        is_corrected_move = kind == 'move_point_corrected'
+        uses_point = is_joint_move or is_visual_measure or is_corrected_move
+        self.queue_point_combo.setEnabled(uses_point)
+        if is_visual_measure:
+            self.queue_point_label.setText('参考采集组')
+        elif is_corrected_move:
+            self.queue_point_label.setText('待纠偏点位')
+        else:
+            self.queue_point_label.setText('目标点位')
         for widget in (
             self.queue_speed_factor_spin,
             self.queue_speed_j_spin,
             self.queue_acc_j_spin,
-            self.queue_tolerance_spin,
         ):
-            widget.setEnabled(is_move)
+            widget.setEnabled(is_joint_move or is_corrected_move)
+        self.queue_tolerance_spin.setEnabled(is_joint_move)
+        for widget in self.queue_visual_measure_widgets:
+            widget.setEnabled(is_visual_measure)
+        for widget in self.queue_visual_move_widgets:
+            widget.setEnabled(is_corrected_move)
+        for widget in self.queue_agv_common_widgets:
+            widget.setEnabled(is_agv_nav)
+        for widget in self.queue_agv_station_widgets:
+            widget.setEnabled(is_agv_station)
+        for widget in self.queue_agv_waypoint_widgets:
+            widget.setEnabled(is_agv_waypoint)
 
         configurations = {
             'gripper_close_percent': ('闭合比例', 0.0, 100.0, 0, ' %'),
@@ -2413,7 +3281,9 @@ class DobotOperatorWindow(QMainWindow):
             if kind == 'wait' and self.queue_value_spin.value() < 1.0:
                 self.queue_value_spin.setValue(1.0)
         else:
-            self.queue_value_label.setText('无需数值' if not is_move else '数值')
+            self.queue_value_label.setText(
+                '无需数值' if not is_joint_move else '数值'
+            )
 
     def _queue_editing_allowed(self) -> bool:
         if self._queue_is_running:
@@ -2430,7 +3300,45 @@ class DobotOperatorWindow(QMainWindow):
             return
         kind = self.queue_kind_combo.currentData()
         value = self.queue_value_spin.value()
-        if kind == 'move_point':
+        if kind == 'agv_navigate_station':
+            station = self.queue_agv_station_combo.currentText().strip()
+            if not station:
+                QMessageBox.warning(
+                    self,
+                    '没有AGV航点',
+                    '请先启动AGV驱动并刷新地图和航点。',
+                )
+                return
+            params = {
+                'station_id': station,
+                'max_speed_mps': self.queue_agv_speed_spin.value(),
+                'timeout_s': self.queue_agv_timeout_spin.value(),
+            }
+        elif kind == 'agv_navigate_pose':
+            name = self.queue_agv_waypoint_combo.currentText().strip()
+            waypoint = next(
+                (
+                    value for value in self._agv_user_waypoints
+                    if value.name == name
+                ),
+                None,
+            )
+            if waypoint is None:
+                QMessageBox.warning(
+                    self,
+                    '没有用户航点',
+                    '请先在“AGV航点与路径”页面记录用户航点。',
+                )
+                return
+            params = {
+                'waypoint_name': waypoint.name,
+                'x': waypoint.x,
+                'y': waypoint.y,
+                'yaw': waypoint.yaw,
+                'max_speed_mps': self.queue_agv_speed_spin.value(),
+                'timeout_s': self.queue_agv_timeout_spin.value(),
+            }
+        elif kind == 'move_point':
             point = self.queue_point_combo.currentText()
             if not point:
                 QMessageBox.warning(self, '没有点位', '请先在取点页面保存点位')
@@ -2441,6 +3349,55 @@ class DobotOperatorWindow(QMainWindow):
                 'speed_j': self.queue_speed_j_spin.value(),
                 'acc_j': self.queue_acc_j_spin.value(),
                 'tolerance_deg': self.queue_tolerance_spin.value(),
+            }
+        elif kind == 'measure_apriltag_correction':
+            reference = self.queue_point_combo.currentText()
+            if not reference:
+                QMessageBox.warning(
+                    self, '没有参考采集', '请先在理想到站位置同步拍照保存参考采集组'
+                )
+                return
+            params = {
+                'reference_capture': reference,
+                'family': self.queue_visual_family_combo.currentData(),
+                'tag_id': self.queue_visual_id_spin.value(),
+                'tag_size_mm': self.queue_visual_size_spin.value(),
+                'camera_host': self.camera_ip_edit.text().strip(),
+                'camera_timeout_s': self.camera_timeout_spin.value(),
+                'samples': self.queue_visual_samples_spin.value(),
+                'max_reprojection_rms_px': (
+                    self.queue_visual_reprojection_spin.value()
+                ),
+                'max_translation_mm': (
+                    self.queue_visual_translation_limit_spin.value()
+                ),
+                'max_rotation_deg': (
+                    self.queue_visual_rotation_limit_spin.value()
+                ),
+                'max_sample_translation_spread_mm': (
+                    self.queue_visual_translation_spread_spin.value()
+                ),
+                'max_sample_rotation_spread_deg': (
+                    self.queue_visual_rotation_spread_spin.value()
+                ),
+            }
+        elif kind == 'move_point_corrected':
+            point = self.queue_point_combo.currentText()
+            if not point:
+                QMessageBox.warning(self, '没有点位', '请先保存待纠偏点位')
+                return
+            params = {
+                'point': point,
+                'motion_type': self.queue_corrected_motion_combo.currentData(),
+                'speed_factor': self.queue_speed_factor_spin.value(),
+                'speed': self.queue_speed_j_spin.value(),
+                'acc': self.queue_acc_j_spin.value(),
+                'position_tolerance_mm': (
+                    self.queue_corrected_position_tolerance_spin.value()
+                ),
+                'orientation_tolerance_deg': (
+                    self.queue_corrected_orientation_tolerance_spin.value()
+                ),
             }
         elif kind == 'gripper_close_percent':
             params = {'percent': round(value)}
@@ -2575,8 +3532,23 @@ class DobotOperatorWindow(QMainWindow):
         if not self.queue_commands:
             QMessageBox.warning(self, '空队列', '请先添加至少一条指令')
             return
-        if not self.ros.driver_ready():
+        requires_robot = any(
+            command.kind not in {
+                'agv_navigate_station', 'agv_navigate_pose', 'wait'
+            }
+            for command in self.queue_commands
+        )
+        requires_agv = any(
+            command.kind in {'agv_navigate_station', 'agv_navigate_pose'}
+            for command in self.queue_commands
+        )
+        if requires_robot and not self.ros.driver_ready():
             QMessageBox.warning(self, '驱动不可用', '请先启动并连接ROS 2驱动')
+            return
+        if requires_agv and not self.ros.agv_driver_ready():
+            QMessageBox.warning(
+                self, 'AGV驱动不可用', '请先启动并连接SEER AGV ROS 2驱动'
+            )
             return
         requires_gripper = any(
             command.kind.startswith('gripper_')
@@ -2592,14 +3564,55 @@ class DobotOperatorWindow(QMainWindow):
 
         points_dir = self._current_points_dir()
         try:
+            correction_available = False
+            station_ids = {
+                str(station.get('id'))
+                for station in self.ros.agv_stations()
+                if isinstance(station, dict) and station.get('id')
+            }
             for command in self.queue_commands:
-                if command.kind == 'move_point':
+                if command.kind == 'agv_navigate_station':
+                    station_id = command.params['station_id']
+                    if station_id not in station_ids:
+                        raise OperatorInputError(
+                            f'AGV航点 {station_id} 不在驱动发布的当前航点列表中'
+                        )
+                    correction_available = False
+                elif command.kind == 'agv_navigate_pose':
+                    correction_available = False
+                elif command.kind == 'move_point':
                     load_point(points_dir, command.params['point'])
+                elif command.kind == 'measure_apriltag_correction':
+                    if self.handeye_transform is None:
+                        raise VisualCorrectionError(
+                            self.handeye_error or '手眼标定变换尚未加载'
+                        )
+                    load_reference_tag_transform(
+                        points_dir,
+                        command.params['reference_capture'],
+                        command.params['family'],
+                        command.params['tag_id'],
+                        command.params['tag_size_mm'],
+                        self.handeye_transform,
+                        command.params['max_reprojection_rms_px'],
+                    )
+                    correction_available = True
+                elif command.kind == 'move_point_corrected':
+                    if not correction_available:
+                        raise VisualCorrectionError(
+                            '“移动到纠偏点位”前必须排列一个'
+                            '“测量AprilTag纠偏”指令'
+                        )
+                    point = load_point(points_dir, command.params['point'])
+                    if point.pose is None:
+                        raise VisualCorrectionError(
+                            f'点位 {point.name} 缺少Tool0笛卡尔位姿'
+                        )
         except Exception as exc:
             QMessageBox.critical(
                 self,
-                '队列点位检查失败',
-                f'尚未执行任何指令。请修正点位文件后重试：\n{exc}',
+                '队列预检查失败',
+                f'尚未执行任何指令。请修正队列或采集数据后重试：\n{exc}',
             )
             return
 
@@ -2613,19 +3626,29 @@ class DobotOperatorWindow(QMainWindow):
         if QMessageBox.warning(
             self,
             '确认执行任务队列',
-            f'{preview}\n\n确认整条机械臂路径安全、夹爪周围无人，并按此顺序执行？',
+            f'{preview}\n\n确认机械臂已处于适合当前步骤的安全姿态、AGV路径和'
+            '整条机械臂路径均无人无障碍，并按此顺序执行？',
             QMessageBox.Yes | QMessageBox.Cancel,
             QMessageBox.Cancel,
         ) != QMessageBox.Yes:
             return
 
         commands = list(self.queue_commands)
+        requires_visual = any(
+            command.kind == 'measure_apriltag_correction'
+            for command in commands
+        )
         self.queue_cancel.clear()
         self._queue_is_running = True
         self.queue_execute_button.setEnabled(False)
         self.queue_stop_button.setEnabled(True)
         self._render_queue_table()
-        runner = TaskQueueRunner(self.ros)
+        runner = TaskQueueRunner(
+            self.ros,
+            visual_correction_provider=self._measure_visual_correction,
+        )
+        if requires_visual:
+            self._preview_pause.set()
 
         def progress(index: int, state: str, message: str) -> None:
             self._signals.queue_step.emit(index, state, message)
@@ -2636,6 +3659,8 @@ class DobotOperatorWindow(QMainWindow):
                     commands, points_dir, self.queue_cancel, progress
                 )
             finally:
+                if requires_visual:
+                    self._preview_pause.clear()
                 self._signals.queue_worker_ended.emit()
 
         self._submit('执行任务队列', operation, self._queue_finished)

@@ -106,11 +106,26 @@ class AprilTagLocalizer:
         dictionary = cv2.aruco.getPredefinedDictionary(
             APRILTAG_DICTIONARIES[family]
         )
-        parameters = cv2.aruco.DetectorParameters()
+        if hasattr(cv2.aruco, 'DetectorParameters'):
+            parameters = cv2.aruco.DetectorParameters()
+        else:
+            parameters = cv2.aruco.DetectorParameters_create()
         parameters.cornerRefinementMethod = cv2.aruco.CORNER_REFINE_APRILTAG
-        detector = cv2.aruco.ArucoDetector(dictionary, parameters)
+        if hasattr(cv2.aruco, 'ArucoDetector'):
+            detector = cv2.aruco.ArucoDetector(dictionary, parameters)
+        else:
+            detector = (dictionary, parameters)
         self._detectors[family] = detector
         return detector
+
+    def _detect_markers(self, image: np.ndarray, family: str):
+        detector = self._detector(family)
+        if hasattr(detector, 'detectMarkers'):
+            return detector.detectMarkers(image)
+        dictionary, parameters = detector
+        return cv2.aruco.detectMarkers(
+            image, dictionary, parameters=parameters
+        )
 
     def detect(
         self,
@@ -134,9 +149,9 @@ class AprilTagLocalizer:
         families = list(APRILTAG_DICTIONARIES) if family == 'auto' else [family]
         detections = []
         for current_family in families:
-            corners, ids, unused_rejected = self._detector(
-                current_family
-            ).detectMarkers(image)
+            corners, ids, unused_rejected = self._detect_markers(
+                image, current_family
+            )
             if ids is None:
                 continue
             for marker_id, marker_corners in zip(ids.reshape(-1), corners):

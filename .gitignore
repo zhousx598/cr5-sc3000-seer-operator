@@ -18,6 +18,7 @@ htmlcov/
 
 # Runtime data and device-specific calibration/production data.
 queues/
+agv_waypoints.json
 apriltag_validation/
 points/
 

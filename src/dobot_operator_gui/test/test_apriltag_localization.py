@@ -34,7 +34,10 @@ def test_detect_and_localize_synthetic_apriltag(tmp_path: Path):
     dictionary = cv2.aruco.getPredefinedDictionary(
         cv2.aruco.DICT_APRILTAG_36h11
     )
-    tag = cv2.aruco.generateImageMarker(dictionary, 7, 400)
+    if hasattr(cv2.aruco, 'generateImageMarker'):
+        tag = cv2.aruco.generateImageMarker(dictionary, 7, 400)
+    else:
+        tag = cv2.aruco.drawMarker(dictionary, 7, 400)
     image = np.full((1024, 1408), 255, dtype=np.uint8)
     image[312:712, 504:904] = tag
     image = cv2.cvtColor(image, cv2.COLOR_GRAY2BGR)

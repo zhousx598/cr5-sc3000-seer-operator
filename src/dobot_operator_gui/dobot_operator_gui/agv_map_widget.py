@@ -16,6 +16,8 @@ class AgvMapWidget(QWidget):
         self.setMouseTracking(True)
         self._map_data = {}
         self._pose = {}
+        self._user_waypoints: list[dict] = []
+        self._planned_route: list[dict] = []
         self._bounds = (-2.0, 2.0, -2.0, 2.0)
         self._scale = 60.0
         self._pan = QPointF(0.0, 0.0)
@@ -35,6 +37,22 @@ class AgvMapWidget(QWidget):
 
     def set_pose(self, pose: dict) -> None:
         self._pose = pose if isinstance(pose, dict) else {}
+        self.update()
+
+    def set_user_waypoints(self, waypoints: list[dict]) -> None:
+        self._user_waypoints = [
+            dict(waypoint) for waypoint in waypoints
+            if isinstance(waypoint, dict)
+        ]
+        self._bounds = self._calculate_bounds()
+        self.update()
+
+    def set_planned_route(self, waypoints: list[dict]) -> None:
+        self._planned_route = [
+            dict(waypoint) for waypoint in waypoints
+            if isinstance(waypoint, dict)
+        ]
+        self._bounds = self._calculate_bounds()
         self.update()
 
     def set_relocation_selection(self, x: float, y: float) -> None:
@@ -72,6 +90,8 @@ class AgvMapWidget(QWidget):
             for item in self._map_data.get(key, []):
                 if isinstance(item, dict):
                     add_pair((item.get('x'), item.get('y')))
+        for item in self._user_waypoints + self._planned_route:
+            add_pair((item.get('x'), item.get('y')))
         if not points:
             return (-2.0, 2.0, -2.0, 2.0)
         xs = [point[0] for point in points]
@@ -134,7 +154,9 @@ class AgvMapWidget(QWidget):
         normal = QPolygonF()
         for item in self._map_data.get('normal_points', []):
             if isinstance(item, list) and len(item) >= 2:
-                normal.append(self.world_to_screen(float(item[0]), float(item[1])))
+                normal.append(
+                    self.world_to_screen(float(item[0]), float(item[1]))
+                )
         if normal:
             painter.setPen(QPen(QColor(190, 202, 218, 170), 2.0))
             painter.drawPoints(normal)
@@ -156,7 +178,9 @@ class AgvMapWidget(QWidget):
             first = curve[0]
             path.moveTo(self.world_to_screen(float(first[0]), float(first[1])))
             for point in curve[1:]:
-                path.lineTo(self.world_to_screen(float(point[0]), float(point[1])))
+                path.lineTo(
+                    self.world_to_screen(float(point[0]), float(point[1]))
+                )
             painter.drawPath(path)
 
         painter.setPen(QPen(QColor('#59e5ad'), 1.5))
@@ -166,7 +190,78 @@ class AgvMapWidget(QWidget):
                 continue
             point = self.world_to_screen(float(item['x']), float(item['y']))
             painter.drawEllipse(point, 5.0, 5.0)
-            painter.drawText(point + QPointF(7.0, -7.0), str(item.get('id', '')))
+            self._draw_heading(
+                painter,
+                item,
+                QColor('#59e5ad'),
+                str(item.get('id', '')),
+            )
+
+        if len(self._planned_route) >= 2:
+            painter.setPen(
+                QPen(QColor('#ffca5c'), 2.5, Qt.DashLine)
+            )
+            route = QPainterPath()
+            first = self._planned_route[0]
+            route.moveTo(
+                self.world_to_screen(float(first['x']), float(first['y']))
+            )
+            for item in self._planned_route[1:]:
+                route.lineTo(
+                    self.world_to_screen(float(item['x']), float(item['y']))
+                )
+            painter.drawPath(route)
+
+        painter.setBrush(QColor('#35a7ff'))
+        for item in self._user_waypoints:
+            try:
+                point = self.world_to_screen(
+                    float(item['x']), float(item['y'])
+                )
+            except (KeyError, TypeError, ValueError):
+                continue
+            diamond = QPolygonF([
+                point + QPointF(0.0, -6.0),
+                point + QPointF(6.0, 0.0),
+                point + QPointF(0.0, 6.0),
+                point + QPointF(-6.0, 0.0),
+            ])
+            painter.setPen(QPen(QColor('#70c5ff'), 1.8))
+            painter.drawPolygon(diamond)
+            self._draw_heading(
+                painter,
+                item,
+                QColor('#70c5ff'),
+                str(item.get('name', '')),
+            )
+
+    def _draw_heading(
+        self,
+        painter: QPainter,
+        item: dict,
+        color: QColor,
+        label: str,
+    ) -> None:
+        try:
+            x = float(item['x'])
+            y = float(item['y'])
+            yaw = float(item.get('yaw', item.get('r')))
+        except (KeyError, TypeError, ValueError):
+            return
+        if not all(math.isfinite(value) for value in (x, y, yaw)):
+            return
+        center = self.world_to_screen(x, y)
+        length_world = max(0.12, min(0.35, 18.0 / max(self._scale, 1.0)))
+        front = self.world_to_screen(
+            x + length_world * math.cos(yaw),
+            y + length_world * math.sin(yaw),
+        )
+        painter.setPen(QPen(color, 2.2))
+        painter.drawLine(center, front)
+        degrees = math.degrees(yaw)
+        painter.drawText(
+            center + QPointF(7.0, -7.0), f'{label}  {degrees:.1f}°'
+        )
 
     def _draw_agv(self, painter: QPainter) -> None:
         try:
@@ -224,7 +319,7 @@ class AgvMapWidget(QWidget):
         painter.setPen(QColor('#9db0c7'))
         painter.drawText(
             QPointF(12.0, self.height() - 12.0),
-            '左键选择重定位坐标；右键拖动画布；滚轮缩放',
+            '箭头表示航点/车体朝向；左键选坐标；右键拖动；滚轮缩放',
         )
 
     def wheelEvent(self, event) -> None:

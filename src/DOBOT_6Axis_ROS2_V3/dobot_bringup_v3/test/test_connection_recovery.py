@@ -6,6 +6,7 @@ import pytest
 from dobot_bringup_v3 import dobot_api
 from dobot_bringup_v3.feedback import fankuis
 from dobot_bringup_v3.feedback import MyType
+from dobot_bringup_v3.feedback import resolve_feedback_port
 
 
 class ChunkSocket:
@@ -52,6 +53,26 @@ def test_feedback_reports_closed_connection():
 
     with pytest.raises(ConnectionError, match='closed by robot'):
         client.feed()
+
+
+def test_feedback_port_defaults_to_30005(monkeypatch):
+    monkeypatch.delenv('DOBOT_FEEDBACK_PORT', raising=False)
+
+    assert resolve_feedback_port() == 30005
+
+
+def test_feedback_port_allows_compatibility_port(monkeypatch):
+    monkeypatch.setenv('DOBOT_FEEDBACK_PORT', '30004')
+
+    assert resolve_feedback_port() == 30004
+
+
+@pytest.mark.parametrize('value', ['not-a-port', '29999', '30006'])
+def test_feedback_port_rejects_invalid_values(monkeypatch, value):
+    monkeypatch.setenv('DOBOT_FEEDBACK_PORT', value)
+
+    with pytest.raises(ValueError, match='DOBOT_FEEDBACK_PORT'):
+        resolve_feedback_port()
 
 
 def test_dashboard_socket_is_closed_when_connect_fails(monkeypatch):
