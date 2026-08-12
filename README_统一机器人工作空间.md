@@ -29,7 +29,8 @@
 不要在 Conda 环境的 Python 3.13 中构建 ROS 2 Humble。使用系统 Python 3.10：
 
 ```bash
-cd /home/zsx/dobot_ws
+export DOBOT_WS="${HOME}/dobot_ws"
+cd "${DOBOT_WS}"
 unset PYTHONHOME
 unset PYTHONPATH
 source /opt/ros/humble/setup.bash
@@ -44,7 +45,7 @@ source install/setup.bash
 桌面双击“CR5·相机·AGV 综合上位机”，或执行：
 
 ```bash
-/home/zsx/dobot_ws/start_dobot_operator_gui.sh
+"${DOBOT_WS}/start_dobot_operator_gui.sh"
 ```
 
 启动脚本行为：
@@ -58,7 +59,7 @@ source install/setup.bash
 
 ```bash
 source /opt/ros/humble/setup.bash
-source /home/zsx/dobot_ws/install/setup.bash
+source "${DOBOT_WS}/install/setup.bash"
 ros2 launch seer_agv_driver seer_agv.launch.py enable_cmd_vel:=false
 ```
 
