@@ -940,11 +940,38 @@ class DobotRosClient(Node):
         restore_collision_level: int | None,
         restore_safe_skin: bool = False,
     ) -> str:
+        initial_mode = self.get_mode()
+        if initial_mode not in {'5', '6'}:
+            raise DobotServiceError(
+                '退出拖动前控制器必须处于模式6，或已经稳定回到模式5；'
+                f'当前为 {mode_text(initial_mode)}。未发送StopDrag或保护配置命令'
+            )
+
         errors = []
-        try:
-            self._call('StopDrag', StopDrag.Request())
-        except DobotServiceError as exc:
-            errors.append(f'StopDrag失败：{exc}')
+        mode = initial_mode
+        if initial_mode == '6':
+            try:
+                self._call('StopDrag', StopDrag.Request())
+            except DobotServiceError as exc:
+                errors.append(f'StopDrag失败：{exc}')
+
+            # StopDrag() returning res=0 only means that the controller accepted
+            # the request.  The CR5 can remain in mode 6 briefly while its control
+            # loop changes back to enabled-idle mode.  Writing SafeSkin/collision
+            # parameters during that interval can trigger alarm 161 (control mode
+            # switching error), so do not restore either setting until mode 5 is
+            # actually observable.
+            try:
+                mode = self._wait_for_mode({'5'}, timeout=8.0)
+            except DobotServiceError as exc:
+                errors.append(f'等待退出拖动稳定到模式5失败：{exc}')
+
+        if mode != '5':
+            errors.append(
+                '控制模式尚未稳定，未继续发送电子皮肤或碰撞等级配置，'
+                '以免触发控制模式切换错误161'
+            )
+            raise DobotServiceError('；'.join(errors))
 
         if restore_safe_skin:
             try:
@@ -958,7 +985,7 @@ class DobotRosClient(Node):
                 errors.append(f'碰撞检测恢复失败：{exc}')
         if errors:
             raise DobotServiceError('；'.join(errors))
-        return self._wait_for_mode({'5'}, timeout=8.0)
+        return mode
 
     def restore_drag_protections(
         self,

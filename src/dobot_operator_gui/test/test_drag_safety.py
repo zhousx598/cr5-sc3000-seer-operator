@@ -76,15 +76,67 @@ def test_start_drag_rolls_back_both_protections_on_failure():
     ]
 
 
-def test_stop_drag_restores_both_even_if_stop_drag_fails():
+def test_stop_drag_waits_for_mode5_before_restoring_protections():
     client = make_client()
     calls = []
+
+    client.get_mode = lambda: '6'
+    client._call = lambda name, request: calls.append((name, None))
+    client._wait_for_mode = lambda modes, timeout: (
+        calls.append(('wait_mode', set(modes))),
+        '5',
+    )[1]
+    client.set_safe_skin = lambda enabled: calls.append(
+        ('safe_skin', enabled)
+    )
+    client.set_collision_level = lambda level: calls.append(
+        ('collision', level)
+    )
+
+    mode = client.stop_drag(3, True)
+
+    assert mode == '5'
+    assert calls == [
+        ('StopDrag', None),
+        ('wait_mode', {'5'}),
+        ('safe_skin', True),
+        ('collision', 3),
+    ]
+
+
+def test_stop_drag_is_idempotent_after_mode_is_already_5():
+    client = make_client()
+    calls = []
+
+    client.get_mode = lambda: '5'
+    client._call = lambda name, request: calls.append((name, None))
+    client.set_safe_skin = lambda enabled: calls.append(
+        ('safe_skin', enabled)
+    )
+    client.set_collision_level = lambda level: calls.append(
+        ('collision', level)
+    )
+
+    mode = client.stop_drag(3, True)
+
+    assert mode == '5'
+    assert calls == [('safe_skin', True), ('collision', 3)]
+
+
+def test_stop_drag_restores_after_reported_error_if_mode_reaches_5():
+    client = make_client()
+    calls = []
+    client.get_mode = lambda: '6'
 
     def reject_stop(name, request):
         calls.append((name, None))
         raise DobotServiceError('simulated StopDrag failure')
 
     client._call = reject_stop
+    client._wait_for_mode = lambda modes, timeout: (
+        calls.append(('wait_mode', set(modes))),
+        '5',
+    )[1]
     client.set_safe_skin = lambda enabled: calls.append(
         ('safe_skin', enabled)
     )
@@ -97,9 +149,34 @@ def test_stop_drag_restores_both_even_if_stop_drag_fails():
 
     assert calls == [
         ('StopDrag', None),
+        ('wait_mode', {'5'}),
         ('safe_skin', True),
         ('collision', 3),
     ]
+
+
+def test_stop_drag_does_not_write_protections_during_failed_transition():
+    client = make_client()
+    calls = []
+    client.get_mode = lambda: '6'
+    client._call = lambda name, request: calls.append((name, None))
+
+    def reject_wait(modes, timeout):
+        calls.append(('wait_mode', set(modes)))
+        raise DobotServiceError('still mode 6')
+
+    client._wait_for_mode = reject_wait
+    client.set_safe_skin = lambda enabled: calls.append(
+        ('safe_skin', enabled)
+    )
+    client.set_collision_level = lambda level: calls.append(
+        ('collision', level)
+    )
+
+    with pytest.raises(DobotServiceError, match='未继续发送'):
+        client.stop_drag(3, True)
+
+    assert calls == [('StopDrag', None), ('wait_mode', {'5'})]
 
 
 def test_restore_protections_attempts_collision_after_safeskin_error():
